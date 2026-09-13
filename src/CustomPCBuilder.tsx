@@ -310,7 +310,7 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
 
   return (
     <main className="pt-[56px] min-h-screen">
-      <div className="max-w-[1320px] mx-auto px-8 py-12">
+      <div className="max-w-[1320px] mx-auto px-5 sm:px-8 py-12">
         <button
           onClick={onBack}
           className="flex items-center gap-2 text-[13px] text-[#888888] hover:text-[#0A0A0A] transition-colors mb-8"
@@ -395,7 +395,7 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
           {/* Recommendation panel */}
           <div>
             {!recommendation ? (
-              <div className="h-full min-h-[300px] border border-dashed border-[#E8E8E8] rounded-2xl flex items-center justify-center text-center px-8">
+              <div className="h-full min-h-[300px] border border-dashed border-[#E8E8E8] rounded-2xl flex items-center justify-center text-center px-5 sm:px-8">
                 <p className="text-[13px] text-[#BBBBBB] max-w-[280px]">
                   Your recommended build will show up here once you tell the assistant what you're
                   looking for.

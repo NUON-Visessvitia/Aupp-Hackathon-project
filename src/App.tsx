@@ -32,6 +32,18 @@ const IconChevronDown = () => (
   </svg>
 )
 
+const IconMenu = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="4" x2="20" y1="7" y2="7" /><line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="17" y2="17" />
+  </svg>
+)
+
+const IconClose = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+)
+
 // ── Data ──────────────────────────────────────────────────────────────────────
 
 const NAV_LINKS: { label: string; items: string[] | null }[] = [
@@ -138,16 +150,21 @@ function Nav({
   onNavigateHome: () => void
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const navRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     function handlePointerDown(e: MouseEvent) {
       if (navRef.current && !navRef.current.contains(e.target as Node)) {
         setOpenId(null)
+        setMobileMenuOpen(false)
       }
     }
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpenId(null)
+      if (e.key === "Escape") {
+        setOpenId(null)
+        setMobileMenuOpen(false)
+      }
     }
     document.addEventListener("mousedown", handlePointerDown)
     document.addEventListener("keydown", handleKeyDown)
@@ -164,9 +181,12 @@ function Nav({
       ref={navRef}
       className="fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-b border-[#E8E8E8]"
     >
-      <div className="max-w-[1320px] mx-auto px-8 h-[56px] flex items-center justify-between">
+      <div className="max-w-[1320px] mx-auto px-5 sm:px-8 h-[56px] flex items-center justify-between">
         <button
-          onClick={onNavigateHome}
+          onClick={() => {
+            onNavigateHome()
+            setMobileMenuOpen(false)
+          }}
           className="text-[15px] font-bold tracking-[-0.02em] select-none"
         >
           forge.
@@ -294,8 +314,66 @@ function Nav({
 
           <span className="text-[#DDDDDD] select-none hidden md:block">|</span>
           <span className="text-[13px] text-[#555555] hidden md:block">EN</span>
+
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+            aria-expanded={mobileMenuOpen}
+            className="md:hidden hover:opacity-40 transition-opacity"
+          >
+            {mobileMenuOpen ? <IconClose /> : <IconMenu />}
+          </button>
         </div>
       </div>
+
+      {mobileMenuOpen && (
+        <div className="md:hidden border-t border-[#E8E8E8] bg-white px-5 sm:px-8 py-5 max-h-[calc(100vh-56px)] overflow-y-auto">
+          <div className="flex flex-col gap-6">
+            {NAV_LINKS.map((link) =>
+              link.items ? (
+                <div key={link.label}>
+                  <p className="text-[11px] tracking-[0.08em] uppercase text-[#BBBBBB] mb-2.5">
+                    {link.label}
+                  </p>
+                  <div className="flex flex-col gap-1">
+                    {link.items.map((item) => {
+                      const isComponents = link.label === "Components"
+                      const isActive = isComponents && activeComponentFilter === item
+                      return (
+                        <button
+                          key={item}
+                          type="button"
+                          onClick={() => {
+                            if (isComponents) onSelectComponentFilter(item)
+                            setMobileMenuOpen(false)
+                          }}
+                          className={`text-left text-[14px] py-1.5 transition-colors ${isActive ? "text-[#0A0A0A] font-medium" : "text-[#555555] hover:text-[#0A0A0A]"
+                            }`}
+                        >
+                          {item}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <button
+                  key={link.label}
+                  type="button"
+                  onClick={() => {
+                    if (link.label === "Gaming PCs") onOpenCustomPC()
+                    setMobileMenuOpen(false)
+                  }}
+                  className="text-left text-[15px] font-medium text-[#0A0A0A]"
+                >
+                  {link.label}
+                </button>
+              ),
+            )}
+          </div>
+        </div>
+      )}
     </nav>
   )
 }
@@ -306,11 +384,11 @@ function HeroSection() {
   return (
     <section className="pt-[56px] bg-white">
       {/* Headline block */}
-      <div className="text-center pt-[88px] pb-16 px-8">
+      <div className="text-center pt-[88px] pb-16 px-5 sm:px-8">
         <p className="text-[11px] tracking-[0.12em] uppercase text-[#AAAAAA] mb-6">
           New — Q9 Series
         </p>
-        <h1 className="text-[64px] md:text-[82px] lg:text-[100px] font-bold tracking-[-0.035em] leading-[0.92] text-[#0A0A0A] mb-8">
+        <h1 className="text-[42px] sm:text-[56px] md:text-[82px] lg:text-[100px] font-bold tracking-[-0.035em] leading-[0.92] text-[#0A0A0A] mb-8">
           Find the right specs<br />tailored to your needs.
         </h1>
         <p className="text-[14px] text-[#888888] max-w-[400px] mx-auto leading-[1.7] mb-11">
@@ -349,7 +427,7 @@ function HeroSection() {
 
 function MeetTheSeriesSection() {
   return (
-    <section className="py-28 px-8">
+    <section className="py-28 px-5 sm:px-8">
       <div className="max-w-[1320px] mx-auto">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start gap-6 mb-20">
@@ -423,7 +501,7 @@ function SuitYourSpaceSection() {
 
   return (
     <section className="py-24 border-t border-[#E8E8E8]">
-      <div className="max-w-[1320px] mx-auto px-8">
+      <div className="max-w-[1320px] mx-auto px-5 sm:px-8">
         {/* Header */}
         <div className="text-center mb-14">
           <h2 className="text-[38px] md:text-[52px] font-bold tracking-[-0.025em] leading-[1.02] mb-4">
@@ -529,10 +607,10 @@ function FeatureRow({
 function SimplifiedBuildingSection() {
   return (
     <section className="py-28 border-t border-[#E8E8E8]">
-      <div className="max-w-[1320px] mx-auto px-8">
+      <div className="max-w-[1320px] mx-auto px-5 sm:px-8">
         {/* Section header — large editorial headline */}
         <div className="flex flex-col md:flex-row md:items-end gap-6 mb-28">
-          <h2 className="text-[52px] md:text-[72px] lg:text-[88px] font-bold tracking-[-0.035em] leading-[0.92] flex-1">
+          <h2 className="text-[38px] sm:text-[52px] md:text-[72px] lg:text-[88px] font-bold tracking-[-0.035em] leading-[0.92] flex-1">
             Simplified<br />Building.
           </h2>
           <p className="text-[14px] text-[#888888] max-w-[280px] leading-[1.7] flex-shrink-0 md:pb-2">
@@ -590,7 +668,7 @@ function DiscoverFavoritesSection({
 
   return (
     <section id="favorites" className="py-24 border-t border-[#E8E8E8] scroll-mt-[56px]">
-      <div className="max-w-[1320px] mx-auto px-8">
+      <div className="max-w-[1320px] mx-auto px-5 sm:px-8">
         {/* Header */}
         <div className="flex items-baseline justify-between mb-16 flex-wrap gap-y-4">
           <div>
@@ -670,7 +748,7 @@ function DiscoverFavoritesSection({
 
 function BannerCTA() {
   return (
-    <section className="bg-[#12244A] py-28 px-8">
+    <section className="bg-[#12244A] py-28 px-5 sm:px-8">
       <div className="max-w-[1320px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-10">
         <div>
           <p className="text-[11px] tracking-[0.12em] uppercase text-[#5B7BAF] mb-4">
@@ -702,7 +780,7 @@ function Footer() {
   ]
 
   return (
-    <footer className="border-t border-[#E8E8E8] py-16 px-8">
+    <footer className="border-t border-[#E8E8E8] py-16 px-5 sm:px-8">
       <div className="max-w-[1320px] mx-auto">
         <div className="flex flex-col md:flex-row justify-between gap-14 mb-16">
           {/* Brand */}
