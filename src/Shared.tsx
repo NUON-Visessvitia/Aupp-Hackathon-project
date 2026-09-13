@@ -1,5 +1,12 @@
 import { useEffect } from 'react'
-import type { ComponentProduct } from './data/products'
+
+type ModalProduct = {
+  name: string
+  category: string
+  price: string
+  specs: [string, string][]
+  img?: string
+}
 
 // Small pieces shared between the main landing page (App.tsx) and the
 // Custom PC Builder page. Kept in their own module so the two pages can
@@ -40,7 +47,7 @@ export function OutlineButton({
   )
 }
 
-export function ProductModal({ product, onClose }: { product: ComponentProduct; onClose: () => void }) {
+export function ProductModal({ product, onClose }: { product: ModalProduct; onClose: () => void }) {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose()
@@ -66,10 +73,12 @@ export function ProductModal({ product, onClose }: { product: ComponentProduct; 
         className="bg-white w-full max-w-[720px] max-h-[88vh] overflow-y-auto rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="grid grid-cols-1 sm:grid-cols-2">
-          <div className="bg-[#F4F4F4] aspect-[4/3] sm:aspect-auto overflow-hidden">
-            <img src={product.img} alt={product.name} className="w-full h-full object-cover" />
-          </div>
+        <div className={`grid grid-cols-1 ${product.img ? 'sm:grid-cols-2' : ''}`}>
+          {product.img && (
+            <div className="bg-[#F4F4F4] aspect-[4/3] sm:aspect-auto overflow-hidden">
+              <img src={product.img} alt={product.name} className="w-full h-full object-cover" />
+            </div>
+          )}
           <div className="p-6 sm:p-8 flex flex-col">
             <div className="flex items-start justify-between gap-4 mb-2">
               <p className="text-[11px] tracking-[0.08em] uppercase text-[#BBBBBB]">{product.category}</p>

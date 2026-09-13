@@ -117,9 +117,8 @@ function NavPopover({
       </button>
       <div
         role="menu"
-        className={`absolute z-50 top-full ${align === "right" ? "right-0" : "left-0"} mt-3 origin-top max-w-[calc(100vw-4rem)] transition-all duration-150 ease-out ${
-          isOpen ? "opacity-100 scale-100 translate-y-0 pointer-events-auto" : "opacity-0 scale-95 -translate-y-1 pointer-events-none"
-        } ${panelClassName}`}
+        className={`absolute z-50 top-full ${align === "right" ? "right-0" : "left-0"} mt-3 origin-top max-w-[calc(100vw-4rem)] transition-all duration-150 ease-out ${isOpen ? "opacity-100 scale-100 translate-y-0 pointer-events-auto" : "opacity-0 scale-95 -translate-y-1 pointer-events-none"
+          } ${panelClassName}`}
       >
         {children}
       </div>
@@ -181,9 +180,8 @@ function Nav({
                 id={link.label}
                 openId={openId}
                 onToggle={toggle}
-                buttonClassName={`flex items-center gap-[5px] text-[13px] transition-colors duration-150 ${
-                  openId === link.label ? "text-[#0A0A0A]" : "text-[#555555] hover:text-[#0A0A0A]"
-                }`}
+                buttonClassName={`flex items-center gap-[5px] text-[13px] transition-colors duration-150 ${openId === link.label ? "text-[#0A0A0A]" : "text-[#555555] hover:text-[#0A0A0A]"
+                  }`}
                 buttonContent={
                   <>
                     {link.label}
@@ -208,11 +206,10 @@ function Nav({
                         }
                         setOpenId(null)
                       }}
-                      className={`w-full text-left px-4 py-2 text-[13px] transition-colors duration-150 ${
-                        isActive
-                          ? "text-[#0A0A0A] font-medium bg-[#F4F4F4]"
-                          : "text-[#555555] hover:text-[#0A0A0A] hover:bg-[#F8F8F8]"
-                      }`}
+                      className={`w-full text-left px-4 py-2 text-[13px] transition-colors duration-150 ${isActive
+                        ? "text-[#0A0A0A] font-medium bg-[#F4F4F4]"
+                        : "text-[#555555] hover:text-[#0A0A0A] hover:bg-[#F8F8F8]"
+                        }`}
                     >
                       {item}
                     </button>
@@ -314,7 +311,7 @@ function HeroSection() {
           New — Q9 Series
         </p>
         <h1 className="text-[64px] md:text-[82px] lg:text-[100px] font-bold tracking-[-0.035em] leading-[0.92] text-[#0A0A0A] mb-8">
-          Introducing<br />the Q9 Series.
+          Find the right specs<br />tailored to your needs.
         </h1>
         <p className="text-[14px] text-[#888888] max-w-[400px] mx-auto leading-[1.7] mb-11">
           Crisp airflow, a uniquely angled 120 mm air duct fan for dedicated GPU cooling,
@@ -459,9 +456,8 @@ function SuitYourSpaceSection() {
                 }}
               />
               <span
-                className={`text-[11px] tracking-[0.03em] transition-colors duration-150 ${
-                  active === f.id ? "text-[#0A0A0A] font-medium" : "text-[#BBBBBB]"
-                }`}
+                className={`text-[11px] tracking-[0.03em] transition-colors duration-150 ${active === f.id ? "text-[#0A0A0A] font-medium" : "text-[#BBBBBB]"
+                  }`}
               >
                 {f.label}
               </span>
@@ -507,9 +503,8 @@ function FeatureRow({
 }) {
   return (
     <div
-      className={`grid grid-cols-1 md:grid-cols-2 gap-12 lg:gap-20 items-center ${
-        reverse ? "" : ""
-      }`}
+      className={`grid grid-cols-1 md:grid-cols-2 gap-12 lg:gap-20 items-center ${reverse ? "" : ""
+        }`}
     >
       <div className={reverse ? "md:order-last" : ""}>
         <p className="text-[11px] tracking-[0.1em] uppercase text-[#BBBBBB] mb-4">
@@ -625,37 +620,37 @@ function DiscoverFavoritesSection({
         {items.length === 0 ? (
           <p className="text-[13px] text-[#888888]">No products in this category yet.</p>
         ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setSelected(item)}
-              className="group cursor-pointer text-left w-full"
-            >
-              <div className="overflow-hidden bg-[#F4F4F4] mb-4">
-                <img
-                  src={item.img}
-                  alt={item.name}
-                  className="w-full aspect-[4/3] object-cover group-hover:scale-[1.05] transition-transform duration-500 ease-out"
-                />
-              </div>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] text-[#BBBBBB] tracking-[0.04em] mb-[3px]">
-                    {item.category}
-                  </p>
-                  <p className="text-[15px] font-semibold tracking-[-0.01em] group-hover:opacity-60 transition-opacity">
-                    {item.name}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {items.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setSelected(item)}
+                className="group cursor-pointer text-left w-full"
+              >
+                <div className="overflow-hidden bg-[#F4F4F4] mb-4">
+                  <img
+                    src={item.img}
+                    alt={item.name}
+                    className="w-full aspect-[4/3] object-cover group-hover:scale-[1.05] transition-transform duration-500 ease-out"
+                  />
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] text-[#BBBBBB] tracking-[0.04em] mb-[3px]">
+                      {item.category}
+                    </p>
+                    <p className="text-[15px] font-semibold tracking-[-0.01em] group-hover:opacity-60 transition-opacity">
+                      {item.name}
+                    </p>
+                  </div>
+                  <p className="text-[14px] font-medium text-[#0A0A0A] whitespace-nowrap pt-[18px]">
+                    {item.price}
                   </p>
                 </div>
-                <p className="text-[14px] font-medium text-[#0A0A0A] whitespace-nowrap pt-[18px]">
-                  {item.price}
-                </p>
-              </div>
-            </button>
-          ))}
-        </div>
+              </button>
+            ))}
+          </div>
         )}
 
         {/* Mobile "View all" */}
