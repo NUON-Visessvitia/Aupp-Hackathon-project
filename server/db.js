@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+import Database from 'better-sqlite3'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
@@ -10,7 +10,7 @@ if (!existsSync(DB_PATH)) {
   throw new Error(`${DB_PATH} not found — run "npm run seed" first.`)
 }
 
-const db = new DatabaseSync(DB_PATH, { readOnly: true })
+const db = new Database(DB_PATH, { readonly: true })
 
 function rowToPart(row) {
   return {

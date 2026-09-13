@@ -1,0 +1,375 @@
+import 'dotenv/config'
+import express from 'express'
+import cors from 'cors'
+import { GoogleGenAI } from '@google/genai'
+import { getCandidates, getPartsByIds, getAlternatives, searchPartsByName, getPricePercentile } from './db.js'
+import { estimateFps } from './benchmarks.js'
+
+const app = express()
+app.use(cors())
+app.use(express.json())
+
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+
+app.get('/api/parts/alternatives', (req, res) => {
+  const { category, excludeId, near, socket, query, limit } = req.query
+
+  if (!category || !excludeId || !near) {
+    return res.status(400).json({ error: 'category, excludeId, and near are required' })
+  }
+
+  const alternatives = getAlternatives({
+    category: String(category),
+    excludeId: Number(excludeId),
+    near: Number(near),
+    socket: socket ? String(socket) : undefined,
+    query: query ? String(query) : undefined,
+    limit: limit ? Number(limit) : query ? 30 : undefined,
+  })
+
+  res.json({ alternatives })
+})
+
+// Pure deterministic math (see detectBottleneck below) — no LLM call needed,
+// so the frontend can re-check this instantly after every manual swap
+// instead of only getting a verdict when the chat happens to run.
+app.get('/api/bottleneck', (req, res) => {
+  const { cpuId, gpuId, resolution } = req.query
+
+  if (!cpuId || !gpuId) {
+    return res.status(400).json({ error: 'cpuId and gpuId are required' })
+  }
+
+  // getPartsByIds doesn't guarantee its result order matches the input ids
+  // (SQL's IN clause isn't ordered) — match back up by id explicitly.
+  const parts = getPartsByIds([Number(cpuId), Number(gpuId)])
+  const cpu = parts.find((p) => p.id === Number(cpuId))
+  const gpu = parts.find((p) => p.id === Number(gpuId))
+  if (!cpu || !gpu) return res.status(404).json({ error: 'part not found' })
+
+  const bottleneck = detectBottleneck([cpu, gpu], resolution ? String(resolution) : null)
+  res.json({ bottleneck })
+})
+
+// Also pure deterministic lookup — no LLM call, so this can run automatically
+// after every swap. See server/benchmarks.js for the curated data and why a
+// real per-GPU-per-game database isn't available for the whole catalog.
+app.get('/api/fps-estimate', (req, res) => {
+  const { cpuId, gpuId, resolution } = req.query
+
+  if (!cpuId || !gpuId) {
+    return res.status(400).json({ error: 'cpuId and gpuId are required' })
+  }
+
+  const parts = getPartsByIds([Number(cpuId), Number(gpuId)])
+  const cpu = parts.find((p) => p.id === Number(cpuId))
+  const gpu = parts.find((p) => p.id === Number(gpuId))
+  if (!cpu || !gpu) return res.status(404).json({ error: 'part not found' })
+
+  const resolutionStr = resolution ? String(resolution) : null
+  const gpuChipset = gpu.specs.find(([label]) => label === 'Chipset')?.[1]
+  const gpuPercentile = getPricePercentile('GPU', Number(gpu.price.replace(/[^0-9.]/g, '')))
+  const isCpuBound = detectBottleneck([cpu, gpu], resolutionStr)?.category === 'CPU'
+
+  const estimates = estimateFps({
+    gpuChipset,
+    gpuPercentile,
+    resolution: resolutionStr ?? '1440p',
+    isCpuBound,
+  })
+
+  res.json({ estimates, resolution: resolutionStr })
+})
+
+app.post('/api/chat', async (req, res) => {
+  const { messages } = req.body
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages must be a non-empty array' })
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  try {
+    const contents = messages.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }))
+
+    const stream = await genAI.models.generateContentStream({
+      model: 'gemini-3.5-flash-lite',
+      contents,
+    })
+
+    for await (const chunk of stream) {
+      const text = chunk.text
+      if (text) res.write(`data: ${JSON.stringify({ text })}\n\n`)
+    }
+
+    res.write('data: [DONE]\n\n')
+    res.end()
+  } catch (err) {
+    console.error(err)
+    res.write(`data: ${JSON.stringify({ error: 'Something went wrong' })}\n\n`)
+    res.end()
+  }
+})
+
+const BUILD_CATEGORIES = ['PC Case', 'Motherboard', 'CPU', 'GPU', 'RAM', 'Cooling', 'Storage', 'Power Supply']
+
+const BUILD_PICKS_SCHEMA = {
+  type: 'object',
+  properties: {
+    reply: {
+      type: 'string',
+      description: 'Conversational reply shown to the user in the chat panel.',
+    },
+    picks: {
+      type: 'array',
+      description:
+        'Catalog ids for the recommended build, one per decided category. Leave empty while still asking clarifying questions.',
+      items: { type: 'integer' },
+    },
+  },
+  required: ['reply', 'picks'],
+}
+
+const INTENT_SCHEMA = {
+  type: 'object',
+  properties: {
+    budget: {
+      type: 'integer',
+      description:
+        'The user\'s stated or implied budget in whole US dollars for the ENTIRE PC build, pulled from anywhere in the conversation so far. Always give your best numeric estimate, even for vague or indirect phrasing: "no budget", "money is no object", "whatever it costs" → a generous but sensible figure like 3500; "best value"/budget-conscious framing with no number → a modest default like 1200. Use 0 only if the conversation genuinely gives no signal about spending at all.',
+    },
+    platform: {
+      type: 'string',
+      enum: ['AMD', 'Intel', 'none'],
+      description: 'CPU/motherboard platform preference, or "none" if unspecified.',
+    },
+    tag: {
+      type: 'string',
+      enum: ['rgb', 'quiet', 'compact', 'none'],
+      description: 'A stated aesthetic, acoustic, or form-factor preference, or "none".',
+    },
+    resolution: {
+      type: 'string',
+      enum: ['1080p', '1440p', '4K', 'none'],
+      description: 'Target gaming resolution, or "none" if unspecified.',
+    },
+    requestedGpuModel: {
+      type: 'string',
+      description:
+        'If the user named a SPECIFIC GPU model (e.g. "RTX 5090", "the 4070 Ti", "9070 XT"), that model name normalized like "RTX 5090". Empty string if none was mentioned.',
+    },
+  },
+  required: ['budget', 'platform', 'tag', 'resolution', 'requestedGpuModel'],
+}
+
+/**
+ * Understands what the user actually means, however they phrased it —
+ * replaces what used to be a pile of regexes (one per phrasing anyone
+ * happened to try) with an actual LLM read of the conversation. Costs a
+ * second model call per message, but that's the point of using an LLM here
+ * instead of pattern-matching: "no budget needed", "cash isn't an issue",
+ * "spare no expense" etc. all just work without being individually anticipated.
+ */
+async function extractIntent(messages) {
+  const contents = messages.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }))
+
+  const response = await genAI.models.generateContent({
+    model: 'gemini-3.5-flash-lite',
+    contents,
+    config: {
+      systemInstruction:
+        'Extract structured build-request parameters from this PC-building conversation. Interpret natural, flexible phrasing generously — people describe budgets, platform preferences, and use cases in many different ways; understand the intent rather than requiring exact keywords.',
+      responseMimeType: 'application/json',
+      responseSchema: INTENT_SCHEMA,
+    },
+  })
+
+  return JSON.parse(response.text)
+}
+
+// How big a gap in price-percentile-within-category (0-1) between the CPU
+// and GPU picks counts as a "bottleneck" worth flagging, per resolution.
+// CPU headroom matters far more at 1080p (GPU-light, CPU-bound) than at 4K
+// (GPU-bound regardless of CPU) — narrower gaps trigger the warning at lower
+// resolutions.
+const BOTTLENECK_THRESHOLD = { '1080p': 0.25, '1440p': 0.35, '4K': 0.5 }
+
+function parsePriceNum(price) {
+  return Number(price.replace(/[^0-9.]/g, ''))
+}
+
+/**
+ * Approximates a CPU/GPU tier mismatch using each part's price-percentile
+ * within its own category as a stand-in for performance tier — there's no
+ * real benchmark data behind this, just the reasonable assumption that
+ * pricier parts within a generation tend to be faster ones. Good enough to
+ * catch an obvious budget-CPU/flagship-GPU (or reverse) pairing; not a
+ * substitute for an actual bottleneck calculator.
+ *
+ * Returns { category, message } where `category` is the part HOLDING BACK
+ * the other one (so the UI can badge that specific row), or null if the two
+ * are reasonably matched.
+ */
+function detectBottleneck(picks, resolution) {
+  const cpu = picks.find((p) => p.category === 'CPU')
+  const gpu = picks.find((p) => p.category === 'GPU')
+  if (!cpu || !gpu) return null
+
+  const cpuPct = getPricePercentile('CPU', parsePriceNum(cpu.price))
+  const gpuPct = getPricePercentile('GPU', parsePriceNum(gpu.price))
+  const threshold = BOTTLENECK_THRESHOLD[resolution] ?? 0.35
+  const gap = gpuPct - cpuPct
+  const resLabel = resolution ? ` at ${resolution}` : ''
+
+  if (gap > threshold) {
+    return {
+      category: 'CPU',
+      message: `The GPU is a noticeably higher tier than the CPU${resLabel} — the CPU may hold it back somewhat.`,
+    }
+  }
+  if (-gap > threshold) {
+    return {
+      category: 'GPU',
+      message: `The CPU is a noticeably higher tier than the GPU${resLabel} — you may be leaving GPU performance on the table.`,
+    }
+  }
+  return null
+}
+
+app.post('/api/build-chat', async (req, res) => {
+  const { messages, currentPicks } = req.body
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages must be a non-empty array' })
+  }
+
+  // If this first call fails (network hiccup, transient API error), fall
+  // back to "no signal detected" rather than hard-failing the whole request
+  // — worst case the model just asks its usual clarifying question.
+  let intent = { budget: 0, platform: 'none', tag: 'none', resolution: 'none', requestedGpuModel: '' }
+  try {
+    intent = await extractIntent(messages)
+  } catch (err) {
+    console.error('extractIntent failed:', err)
+  }
+
+  const budget = intent.budget > 0 ? intent.budget : null
+  const platform = intent.platform !== 'none' ? intent.platform : null
+  const tag = intent.tag !== 'none' ? intent.tag : null
+  const resolution = intent.resolution !== 'none' ? intent.resolution : null
+
+  // No budget yet → send an empty catalog so the model can't invent picks and
+  // has to ask the clarifying question the system prompt tells it to.
+  const candidates = budget ? getCandidates({ budget, platform, tag }) : []
+
+  // The budget-driven shortlist above only covers what's price-appropriate —
+  // a specifically-named card (e.g. "the 5090") can be real but way outside
+  // that range, so it'd otherwise never appear and the model would wrongly
+  // conclude it doesn't exist. Search for it directly and merge it in.
+  if (intent.requestedGpuModel) {
+    const matches = searchPartsByName({ category: 'GPU', query: intent.requestedGpuModel })
+    for (const match of matches) {
+      if (!candidates.some((c) => c.id === match.id)) candidates.push(match)
+    }
+  }
+
+  // The build already on screen — including anything the user manually
+  // swapped in via the UI, which won't necessarily be near the budget-driven
+  // price target and so wouldn't otherwise appear in `candidates` at all.
+  // Merged in so the model can actually reference/keep these ids when the
+  // user is asking ABOUT the current build rather than requesting changes.
+  const currentPicksResolved = Array.isArray(currentPicks) ? getPartsByIds(currentPicks) : []
+  for (const pick of currentPicksResolved) {
+    if (!candidates.some((c) => c.id === pick.id)) candidates.push(pick)
+  }
+
+  const currentBuildNote = currentPicksResolved.length
+    ? `\n\nThe user's CURRENT build already has these parts picked (shown on screen right now):
+${JSON.stringify(currentPicksResolved.map((p) => ({ id: p.id, category: p.category, name: p.name, price: p.price })))}
+If the user's latest message is a QUESTION about this current build (e.g. "does this cause a bottleneck", "is this good for X", "what do you think") rather than a request to change something, return the EXACT SAME ids as the current build in "picks" — do not silently swap any part, even if you'd have picked differently yourself. Only change the specific part(s) the user explicitly asks to change, keeping every other category identical to the current build.`
+    : ''
+
+  const systemInstruction = `You are the build assistant for a PC parts store's "Custom PC Builder" chat.
+Recommend a complete build using ONLY parts from the catalog below, referenced by their exact "id" — never invent parts, names, or specs.
+A complete build has exactly one pick from each of these categories: ${BUILD_CATEGORIES.join(', ')}.
+The CPU and Motherboard you pick must have matching "socket" values.
+Ask a short clarifying question (and return an empty "picks" array) if the user hasn't given you enough to work with yet — a budget and a use case (e.g. gaming resolution, streaming, editing) is enough to proceed.
+Once you have enough information, always return a full set of picks (one id per category) in the same response as your reply — don't describe the build in prose without also returning the picks.
+Keep replies short (2-4 sentences), friendly, and specific about why the parts fit the stated budget and use case — cite at least one concrete spec from the catalog that matters for that use case (e.g. core count and RAM for video editing/rendering, VRAM and clock speed for gaming, upload-friendly cooling and storage speed for streaming), not just generic praise like "powerful" or "great performance."
+Do NOT name a specific CPU or GPU model in your reply text (e.g. don't write "the Core Ultra 9 285K" or "the RTX 5090") — only describe them generically ("the processor", "the graphics card"). The exact part names are shown separately in the UI and will be appended automatically; naming one yourself risks describing a different part than the one you actually picked.${currentBuildNote}
+
+IMPORTANT: the catalog below is a budget-appropriate shortlist from a much larger inventory, not the complete list of everything in stock. If the user asks about a specific product and it's not in the catalog, that almost always means it's real but doesn't fit their current budget — say so and quote what it would actually cost if you can tell from context, or suggest raising the budget. Never claim a well-known, real product is "out of stock," "unavailable," or "doesn't exist" just because it isn't in this shortlist.
+
+Catalog:
+${JSON.stringify(candidates)}`
+
+  try {
+    const contents = messages.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }))
+
+    const response = await genAI.models.generateContent({
+      model: 'gemini-3.5-flash-lite',
+      contents,
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: BUILD_PICKS_SCHEMA,
+      },
+    })
+
+    const parsed = JSON.parse(response.text)
+    let picks = getPartsByIds(parsed.picks ?? [])
+
+    // The model has occasionally returned more than one id for the same
+    // category (a duplicate/second-guessed pick) — keeping only the first
+    // occurrence guarantees exactly one entry per category, so the total,
+    // the bottleneck check, and the rendered list can never disagree with
+    // each other about which part is actually in the build.
+    const seenCategories = new Set()
+    picks = picks.filter((p) => {
+      if (seenCategories.has(p.category)) return false
+      seenCategories.add(p.category)
+      return true
+    })
+
+    // The model occasionally drops a category despite the instruction —
+    // backfill from the same shortlist it was given so a full build always
+    // renders once picks are non-empty.
+    for (const category of BUILD_CATEGORIES) {
+      if (picks.some((p) => p.category === category)) continue
+      const fallback = candidates.find((c) => c.category === category)
+      if (fallback) picks.push(fallback)
+    }
+
+    const bottleneck = picks.length ? detectBottleneck(picks, resolution) : null
+
+    // The model's free-text reply is instructed not to name specific
+    // CPU/GPU models (see system prompt) since that's proven unreliable —
+    // append the real names here instead, guaranteed to match what's
+    // actually in `picks` rather than whatever the model imagined.
+    let reply = parsed.reply
+    if (picks.length) {
+      const cpu = picks.find((p) => p.category === 'CPU')
+      const gpu = picks.find((p) => p.category === 'GPU')
+      if (cpu && gpu) reply += ` This build pairs the ${cpu.name} with the ${gpu.name}.`
+    }
+
+    res.json({ reply, picks, bottleneck, budget, resolution })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Something went wrong' })
+  }
+})
+
+export default app

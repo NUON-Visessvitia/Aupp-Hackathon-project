@@ -3,7 +3,7 @@
 // Restricted to modern sockets (AM4, AM5, LGA1700, LGA1851) so every CPU
 // candidate has a compatible motherboard actually present in the pool.
 
-import { DatabaseSync } from 'node:sqlite'
+import Database from 'better-sqlite3'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -322,7 +322,7 @@ async function main() {
   )
   console.log('Applied 2025→2026 price estimate multipliers:', PRICE_MULTIPLIER)
 
-  const db = new DatabaseSync(DB_PATH)
+  const db = new Database(DB_PATH)
   db.exec(`
     DROP TABLE IF EXISTS parts;
     CREATE TABLE parts (
