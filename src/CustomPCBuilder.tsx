@@ -131,6 +131,31 @@ async function fetchFpsEstimates(
   }
 }
 
+/** The report is plain text with "## Category — Name" headers between parts — not real markdown, just enough structure to split into readable sections. */
+function renderReport(text: string) {
+  const sections = text
+    .split(/\n(?=##\s)/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  return sections.map((section, i) => {
+    const [titleLine, ...rest] = section.replace(/^##\s*/, '').split('\n')
+    const body = rest.join('\n').trim()
+    return (
+      <div key={i} className="mb-6 last:mb-0">
+        <h3 className="text-[14px] font-semibold mb-2 pb-2 border-b border-[#E8E8E8]">
+          {titleLine.trim()}
+        </h3>
+        {body.split(/\n\n+/).map((para, j) => (
+          <p key={j} className="text-[13px] text-[#555555] leading-[1.7] mb-2 last:mb-0">
+            {para.trim()}
+          </p>
+        ))}
+      </div>
+    )
+  })
+}
+
 export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([{ role: 'assistant', text: GREETING }])
   const [input, setInput] = useState('')
@@ -141,6 +166,11 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
   const [swapQuery, setSwapQuery] = useState('')
   const [swapOptions, setSwapOptions] = useState<BuilderPart[]>([])
   const [swapLoading, setSwapLoading] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [reportText, setReportText] = useState<string | null>(null)
+  const [reportGrounded, setReportGrounded] = useState(false)
+  const [reportError, setReportError] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const swapRequestId = useRef(0)
 
@@ -306,6 +336,30 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
     })
     setSwapOpenFor(null)
     setSwapQuery('')
+  }
+
+  async function handleGenerateReport() {
+    if (!recommendation || reportLoading) return
+    setReportOpen(true)
+    setReportLoading(true)
+    setReportError(false)
+    setReportText(null)
+
+    try {
+      const res = await fetch('/api/build-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ picks: recommendation.picks.map((p) => p.id) }),
+      })
+      if (!res.ok) throw new Error('build-report request failed')
+      const data: { report: string; grounded: boolean } = await res.json()
+      setReportText(data.report)
+      setReportGrounded(data.grounded)
+    } catch {
+      setReportError(true)
+    } finally {
+      setReportLoading(false)
+    }
   }
 
   return (
@@ -567,7 +621,9 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
                     </div>
                   ))}
                 </div>
-                <OutlineButton className="mt-8">Add Build to Cart</OutlineButton>
+                <OutlineButton className="mt-8" onClick={handleGenerateReport} disabled={reportLoading}>
+                  {reportLoading ? 'Generating report…' : 'Report'}
+                </OutlineButton>
               </div>
             )}
           </div>
@@ -576,6 +632,52 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
 
       {selectedProduct && (
         <ProductModal product={selectedProduct} onClose={() => setSelectedProduct(null)} />
+      )}
+
+      {reportOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 sm:p-6"
+          onClick={() => setReportOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Build report"
+        >
+          <div
+            className="bg-white w-full max-w-[640px] max-h-[85vh] overflow-y-auto rounded-2xl p-6 sm:p-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-[20px] font-semibold tracking-[-0.01em]">Build Report</h2>
+                {!reportLoading && reportText && (
+                  <p className="text-[11px] text-[#BBBBBB] mt-1">
+                    {reportGrounded
+                      ? 'Reliability notes grounded in live web search where possible.'
+                      : "Live search wasn't available for this report — reliability notes reflect general model knowledge, not a live lookup."}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setReportOpen(false)}
+                aria-label="Close"
+                className="text-[#BBBBBB] hover:text-[#0A0A0A] transition-colors flex-shrink-0"
+              >
+                <IconClose />
+              </button>
+            </div>
+
+            {reportLoading ? (
+              <p className="text-[13px] text-[#888888]">Researching each part — this can take a moment…</p>
+            ) : reportError ? (
+              <p className="text-[13px] text-[#888888]">
+                Sorry, something went wrong generating the report. Mind trying again?
+              </p>
+            ) : (
+              reportText && renderReport(reportText)
+            )}
+          </div>
+        </div>
       )}
     </main>
   )

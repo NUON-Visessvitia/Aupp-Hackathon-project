@@ -29,14 +29,21 @@ export function OutlineButton({
   children,
   className = "",
   dark = false,
+  onClick,
+  disabled = false,
 }: {
   children: React.ReactNode
   className?: string
   dark?: boolean
+  onClick?: () => void
+  disabled?: boolean
 }) {
   return (
     <button
-      className={`inline-flex items-center gap-2 border text-[13px] font-medium px-8 py-[11px] rounded-full tracking-[0.015em] transition-all duration-200 ${
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-2 border text-[13px] font-medium px-8 py-[11px] rounded-full tracking-[0.015em] transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed ${
         dark
           ? "border-white text-white hover:bg-white hover:text-[#0A0A0A]"
           : "border-[#0A0A0A] text-[#0A0A0A] hover:bg-[#0A0A0A] hover:text-white"

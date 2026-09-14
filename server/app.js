@@ -372,4 +372,76 @@ ${JSON.stringify(candidates)}`
   }
 })
 
+/**
+ * A deliberate, infrequent user action (button click, not per chat message)
+ * — unlike the earlier decision to skip live price grounding on every build-
+ * chat turn, the cost/rate-limit tradeoff is worth it here, so this one
+ * actually uses Gemini's Google Search tool for real, current reliability/
+ * reputation research instead of relying on the model's internal knowledge.
+ * Search grounding can't be combined with responseSchema/JSON mode (the same
+ * limitation hit earlier), so this returns free-form markdown-ish text
+ * rather than structured JSON.
+ */
+app.post('/api/build-report', async (req, res) => {
+  const { picks: pickIds } = req.body
+
+  if (!Array.isArray(pickIds) || pickIds.length === 0) {
+    return res.status(400).json({ error: 'picks must be a non-empty array of ids' })
+  }
+
+  const parts = getPartsByIds(pickIds)
+  if (!parts.length) return res.status(404).json({ error: 'no matching parts found' })
+
+  const partsSummary = parts.map((p) => ({
+    category: p.category,
+    name: p.name,
+    price: p.price,
+    specs: Object.fromEntries(p.specs),
+  }))
+
+  const systemInstruction = `You are writing a detailed report on a PC build for a customer who just had it recommended to them. For EACH part listed below, write a focused section covering:
+1. Why it's a good fit for this build — reference its real specs given below, not invented ones.
+2. Its brand/model's real-world reliability and reputation. Use web search to ground this in actual current information wherever you can (recent reviews, known failure-rate discussions, common praise/complaints). If you end up relying on general knowledge rather than something you actually found, say so plainly rather than presenting it as a verified fact.
+3. Any notable pros or cons worth knowing before buying.
+
+Keep each part's section to 3-5 sentences. Use a markdown header per part in the exact form "## Category — Part Name". Only reference specs from the data given below — never invent numbers.
+
+Build parts:
+${JSON.stringify(partsSummary, null, 2)}`
+
+  try {
+    let response
+    let grounded = true
+    try {
+      response = await genAI.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents: [{ role: 'user', parts: [{ text: 'Write the build report.' }] }],
+        config: {
+          systemInstruction,
+          tools: [{ googleSearch: {} }],
+        },
+      })
+    } catch (groundedErr) {
+      // Google Search grounding has its own separate (and much smaller) free
+      // quota from plain generateContent calls — when it's exhausted, fall
+      // back to a plain, ungrounded call rather than failing the whole
+      // report. The prompt already tells the model to flag anything it
+      // states from general knowledge rather than a found source, so the
+      // report is still honest about what it could and couldn't verify.
+      console.error('Grounded report call failed, falling back to ungrounded:', groundedErr)
+      grounded = false
+      response = await genAI.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents: [{ role: 'user', parts: [{ text: 'Write the build report.' }] }],
+        config: { systemInstruction },
+      })
+    }
+
+    res.json({ report: response.text, grounded })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Something went wrong generating the report' })
+  }
+})
+
 export default app
