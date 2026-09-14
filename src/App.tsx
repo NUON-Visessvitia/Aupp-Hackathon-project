@@ -1,7 +1,31 @@
 import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { COMPONENT_CATALOG, COMPONENT_CATEGORIES, type ComponentProduct } from './data/products'
 import CustomPCBuilder from './CustomPCBuilder'
 import { IconArrowRight, OutlineButton, ProductModal } from './Shared'
+
+/** Fades + slides a section up into view the first time it scrolls into the viewport — reused across the landing page instead of hand-rolling an IntersectionObserver per section. */
+function Reveal({
+  children,
+  className = "",
+  delay = 0,
+}: {
+  children: React.ReactNode
+  className?: string
+  delay?: number
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 24 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-80px" }}
+      transition={{ duration: 0.6, delay, ease: [0.22, 1, 0.36, 1] }}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  )
+}
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
@@ -327,9 +351,16 @@ function Nav({
         </div>
       </div>
 
-      {mobileMenuOpen && (
-        <div className="md:hidden border-t border-[#E8E8E8] bg-white px-5 sm:px-8 py-5 max-h-[calc(100vh-56px)] overflow-y-auto">
-          <div className="flex flex-col gap-6">
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="md:hidden border-t border-[#E8E8E8] bg-white px-5 sm:px-8 max-h-[calc(100vh-56px)] overflow-y-auto overflow-x-hidden"
+          >
+          <div className="flex flex-col gap-6 py-5">
             {NAV_LINKS.map((link) =>
               link.items ? (
                 <div key={link.label}>
@@ -372,8 +403,9 @@ function Nav({
               ),
             )}
           </div>
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </nav>
   )
 }
@@ -384,7 +416,12 @@ function HeroSection() {
   return (
     <section className="pt-[56px] bg-white">
       {/* Headline block */}
-      <div className="text-center pt-[88px] pb-16 px-5 sm:px-8">
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+        className="text-center pt-[88px] pb-16 px-5 sm:px-8"
+      >
         <p className="text-[11px] tracking-[0.12em] uppercase text-[#AAAAAA] mb-6">
           New — Q9 Series
         </p>
@@ -396,7 +433,7 @@ function HeroSection() {
           and optimized cable management make this case ideal for powerful, compact builds.
         </p>
         <OutlineButton>Explore</OutlineButton>
-      </div>
+      </motion.div>
 
       {/* Hero image — full-bleed photo + navy accent column */}
       <div className="flex h-[460px] md:h-[580px] lg:h-[660px]">
@@ -430,7 +467,7 @@ function MeetTheSeriesSection() {
     <section className="py-28 px-5 sm:px-8">
       <div className="max-w-[1320px] mx-auto">
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-start gap-6 mb-20">
+        <Reveal className="flex flex-col md:flex-row md:items-start gap-6 mb-20">
           <h2 className="text-[38px] md:text-[52px] font-bold tracking-[-0.025em] leading-[1.02] flex-1 max-w-[480px]">
             Meet the Q9 Series.
           </h2>
@@ -438,14 +475,14 @@ function MeetTheSeriesSection() {
             The Q9 keeps things clean and simple while supporting powerful builds.
             Two versions are available — the Q9 Flow and the Q9 Elite.
           </p>
-        </div>
+        </Reveal>
 
         <Divider />
 
         {/* Comparison grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-16 pt-16">
           {/* Q9 Flow */}
-          <div className="flex flex-col gap-6">
+          <Reveal className="flex flex-col gap-6">
             <div>
               <h3 className="text-[20px] font-semibold tracking-[-0.01em] mb-3">Q9 Flow</h3>
               <p className="text-[13px] text-[#888888] leading-[1.7] max-w-[380px]">
@@ -464,10 +501,10 @@ function MeetTheSeriesSection() {
             <OutlineButton className="self-start">
               Learn more <IconArrowRight />
             </OutlineButton>
-          </div>
+          </Reveal>
 
           {/* Q9 Elite — offset downward for staggered rhythm */}
-          <div className="flex flex-col gap-6 md:mt-20">
+          <Reveal className="flex flex-col gap-6 md:mt-20" delay={0.1}>
             <div>
               <h3 className="text-[20px] font-semibold tracking-[-0.01em] mb-3">Q9 Elite</h3>
               <p className="text-[13px] text-[#888888] leading-[1.7] max-w-[380px]">
@@ -486,7 +523,7 @@ function MeetTheSeriesSection() {
             <OutlineButton className="self-start">
               Learn more <IconArrowRight />
             </OutlineButton>
-          </div>
+          </Reveal>
         </div>
       </div>
     </section>
@@ -503,7 +540,7 @@ function SuitYourSpaceSection() {
     <section className="py-24 border-t border-[#E8E8E8]">
       <div className="max-w-[1320px] mx-auto px-5 sm:px-8">
         {/* Header */}
-        <div className="text-center mb-14">
+        <Reveal className="text-center mb-14">
           <h2 className="text-[38px] md:text-[52px] font-bold tracking-[-0.025em] leading-[1.02] mb-4">
             Suit Your Space.
           </h2>
@@ -511,26 +548,28 @@ function SuitYourSpaceSection() {
             The Q9 Flow and Elite are available in four distinct colorways.
             Find the finish that defines your build.
           </p>
-        </div>
+        </Reveal>
 
         {/* Swatch row */}
         <div className="flex justify-center items-center gap-7 mb-12">
           {FINISHES.map((f) => (
-            <button
+            <motion.button
               key={f.id}
               onClick={() => setActive(f.id)}
+              whileTap={{ scale: 0.92 }}
               className="flex flex-col items-center gap-2.5 group"
               aria-label={`Select ${f.label} finish`}
             >
-              <div
-                className="w-8 h-8 rounded-full transition-transform duration-200 group-hover:scale-110"
+              <motion.div
+                className="w-8 h-8 rounded-full group-hover:scale-110"
+                animate={{ scale: active === f.id ? 1.12 : 1 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
                 style={{
                   backgroundColor: f.swatch,
                   boxShadow:
                     active === f.id
                       ? `0 0 0 1px #ffffff, 0 0 0 2.5px ${f.ring}`
                       : `0 0 0 1px ${f.ring}40`,
-                  transform: active === f.id ? "scale(1.12)" : undefined,
                 }}
               />
               <span
@@ -539,22 +578,35 @@ function SuitYourSpaceSection() {
               >
                 {f.label}
               </span>
-            </button>
+            </motion.button>
           ))}
         </div>
 
         {/* Case preview */}
-        <div className="max-w-[960px] mx-auto overflow-hidden bg-[#F4F4F4]">
-          <img
-            src={current.img}
-            alt={`Q9 Series in ${current.label}`}
-            className="w-full aspect-[16/10] object-cover transition-opacity duration-300"
-          />
+        <div className="max-w-[960px] mx-auto overflow-hidden bg-[#F4F4F4] relative aspect-[16/10]">
+          <AnimatePresence mode="wait">
+            <motion.img
+              key={current.id}
+              src={current.img}
+              alt={`Q9 Series in ${current.label}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.35, ease: "easeOut" }}
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+          </AnimatePresence>
         </div>
 
-        <p className="text-center mt-5 text-[12px] text-[#BBBBBB] tracking-[0.04em]">
+        <motion.p
+          key={current.id}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.3 }}
+          className="text-center mt-5 text-[12px] text-[#BBBBBB] tracking-[0.04em]"
+        >
           {current.label} — Available for Q9 Flow and Q9 Elite
-        </p>
+        </motion.p>
       </div>
     </section>
   )
@@ -580,7 +632,7 @@ function FeatureRow({
   reverse?: boolean
 }) {
   return (
-    <div
+    <Reveal
       className={`grid grid-cols-1 md:grid-cols-2 gap-12 lg:gap-20 items-center ${reverse ? "" : ""
         }`}
     >
@@ -600,7 +652,7 @@ function FeatureRow({
           className="w-full aspect-[4/3] object-cover hover:scale-[1.04] transition-transform duration-700 ease-out"
         />
       </div>
-    </div>
+    </Reveal>
   )
 }
 
@@ -609,7 +661,7 @@ function SimplifiedBuildingSection() {
     <section className="py-28 border-t border-[#E8E8E8]">
       <div className="max-w-[1320px] mx-auto px-5 sm:px-8">
         {/* Section header — large editorial headline */}
-        <div className="flex flex-col md:flex-row md:items-end gap-6 mb-28">
+        <Reveal className="flex flex-col md:flex-row md:items-end gap-6 mb-28">
           <h2 className="text-[38px] sm:text-[52px] md:text-[72px] lg:text-[88px] font-bold tracking-[-0.035em] leading-[0.92] flex-1">
             Simplified<br />Building.
           </h2>
@@ -617,7 +669,7 @@ function SimplifiedBuildingSection() {
             The Q9 is easy to build in, with cable routing, a unique SSD hinge,
             and a dual-chamber design with plenty of space for premium components.
           </p>
-        </div>
+        </Reveal>
 
         <div className="flex flex-col gap-28">
           <FeatureRow
@@ -699,34 +751,37 @@ function DiscoverFavoritesSection({
           <p className="text-[13px] text-[#888888]">No products in this category yet.</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {items.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setSelected(item)}
-                className="group cursor-pointer text-left w-full"
-              >
-                <div className="overflow-hidden bg-[#F4F4F4] mb-4">
-                  <img
-                    src={item.img}
-                    alt={item.name}
-                    className="w-full aspect-[4/3] object-cover group-hover:scale-[1.05] transition-transform duration-500 ease-out"
-                  />
-                </div>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] text-[#BBBBBB] tracking-[0.04em] mb-[3px]">
-                      {item.category}
-                    </p>
-                    <p className="text-[15px] font-semibold tracking-[-0.01em] group-hover:opacity-60 transition-opacity">
-                      {item.name}
+            {items.map((item, i) => (
+              <Reveal key={item.id} delay={Math.min(i, 4) * 0.06}>
+                <motion.button
+                  type="button"
+                  onClick={() => setSelected(item)}
+                  whileHover={{ y: -4 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  className="group cursor-pointer text-left w-full"
+                >
+                  <div className="overflow-hidden bg-[#F4F4F4] mb-4">
+                    <img
+                      src={item.img}
+                      alt={item.name}
+                      className="w-full aspect-[4/3] object-cover group-hover:scale-[1.05] transition-transform duration-500 ease-out"
+                    />
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] text-[#BBBBBB] tracking-[0.04em] mb-[3px]">
+                        {item.category}
+                      </p>
+                      <p className="text-[15px] font-semibold tracking-[-0.01em] group-hover:opacity-60 transition-opacity">
+                        {item.name}
+                      </p>
+                    </div>
+                    <p className="text-[14px] font-medium text-[#0A0A0A] whitespace-nowrap pt-[18px]">
+                      {item.price}
                     </p>
                   </div>
-                  <p className="text-[14px] font-medium text-[#0A0A0A] whitespace-nowrap pt-[18px]">
-                    {item.price}
-                  </p>
-                </div>
-              </button>
+                </motion.button>
+              </Reveal>
             ))}
           </div>
         )}
@@ -739,7 +794,9 @@ function DiscoverFavoritesSection({
         )}
       </div>
 
-      {selected && <ProductModal product={selected} onClose={() => setSelected(null)} />}
+      <AnimatePresence>
+        {selected && <ProductModal key="product-modal" product={selected} onClose={() => setSelected(null)} />}
+      </AnimatePresence>
     </section>
   )
 }
@@ -749,7 +806,7 @@ function DiscoverFavoritesSection({
 function BannerCTA() {
   return (
     <section className="bg-[#12244A] py-28 px-5 sm:px-8">
-      <div className="max-w-[1320px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-10">
+      <Reveal className="max-w-[1320px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-10">
         <div>
           <p className="text-[11px] tracking-[0.12em] uppercase text-[#5B7BAF] mb-4">
             Build configurator
@@ -764,7 +821,7 @@ function BannerCTA() {
             Browse pre-builds <IconArrowRight />
           </button>
         </div>
-      </div>
+      </Reveal>
     </section>
   )
 }

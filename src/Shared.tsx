@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { motion } from 'framer-motion'
 
 type ModalProduct = {
   name: string
@@ -39,21 +40,25 @@ export function OutlineButton({
   disabled?: boolean
 }) {
   return (
-    <button
+    <motion.button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex items-center gap-2 border text-[13px] font-medium px-8 py-[11px] rounded-full tracking-[0.015em] transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed ${
+      whileHover={disabled ? undefined : { scale: 1.035 }}
+      whileTap={disabled ? undefined : { scale: 0.97 }}
+      transition={{ duration: 0.15, ease: "easeOut" }}
+      className={`inline-flex items-center gap-2 border text-[13px] font-medium px-8 py-[11px] rounded-full tracking-[0.015em] transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed ${
         dark
           ? "border-white text-white hover:bg-white hover:text-[#0A0A0A]"
           : "border-[#0A0A0A] text-[#0A0A0A] hover:bg-[#0A0A0A] hover:text-white"
       } ${className}`}
     >
       {children}
-    </button>
+    </motion.button>
   )
 }
 
+/** Render inside <AnimatePresence> at the call site so it gets its exit animation on unmount, not just enter. */
 export function ProductModal({ product, onClose }: { product: ModalProduct; onClose: () => void }) {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -69,14 +74,22 @@ export function ProductModal({ product, onClose }: { product: ModalProduct; onCl
   }, [onClose])
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 sm:p-6"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label={product.name}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 12 }}
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
         className="bg-white w-full max-w-[720px] max-h-[88vh] overflow-y-auto rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -115,7 +128,7 @@ export function ProductModal({ product, onClose }: { product: ModalProduct; onCl
             <OutlineButton className="mt-8 self-start">Add to Build</OutlineButton>
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   )
 }

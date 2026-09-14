@@ -406,6 +406,8 @@ app.post('/api/build-report', async (req, res) => {
 
 Keep each part's section to 3-5 sentences. Use a markdown header per part in the exact form "## Category — Part Name". Only reference specs from the data given below — never invent numbers.
 
+After all the individual part sections, add ONE final section headed exactly "## How It All Works Together" (3-6 sentences) explaining how these SPECIFIC parts interact as a system, not just as a list — e.g. whether the CPU and GPU are reasonably balanced for each other at this build's likely resolution/use case, whether the PSU's wattage comfortably covers what the CPU+GPU actually draw, whether the RAM's speed/capacity suits the CPU platform, whether the cooler's capacity matches the CPU's TDP, and whether the case has the airflow/clearance these specific parts need. Call out any real synergy or genuine mismatch you notice between the actual named parts — don't just restate each part's own strengths again.
+
 Build parts:
 ${JSON.stringify(partsSummary, null, 2)}`
 

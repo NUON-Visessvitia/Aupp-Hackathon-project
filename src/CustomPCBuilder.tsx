@@ -1,5 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { jsPDF } from 'jspdf'
 import { OutlineButton, ProductModal, IconArrowRight } from './Shared'
+
+/** Three pulsing dots for the "assistant is thinking" bubble — a small, obvious signal of life instead of a static "Thinking…" line. */
+function TypingDots() {
+  return (
+    <span className="flex items-center gap-1">
+      {[0, 1, 2].map((i) => (
+        <motion.span
+          key={i}
+          className="w-1.5 h-1.5 rounded-full bg-[#BBBBBB]"
+          animate={{ opacity: [0.3, 1, 0.3], y: [0, -3, 0] }}
+          transition={{ duration: 1, repeat: Infinity, delay: i * 0.15, ease: "easeInOut" }}
+        />
+      ))}
+    </span>
+  )
+}
 
 const IconSwap = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -27,6 +45,14 @@ const IconWarning = ({ size = 14 }: { size?: number }) => (
     <path d="m10.29 3.86-8.18 14.18A2 2 0 0 0 3.86 21h16.28a2 2 0 0 0 1.75-2.96L13.71 3.86a2 2 0 0 0-3.42 0Z" />
     <line x1="12" x2="12" y1="9" y2="13" />
     <line x1="12" x2="12.01" y1="17" y2="17" />
+  </svg>
+)
+
+const IconDownload = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" x2="12" y1="15" y2="3" />
   </svg>
 )
 
@@ -131,22 +157,26 @@ async function fetchFpsEstimates(
   }
 }
 
-/** The report is plain text with "## Category — Name" headers between parts — not real markdown, just enough structure to split into readable sections. */
-function renderReport(text: string) {
-  const sections = text
+/** The report is plain text with "## Section Title" headers — not real markdown, just enough structure to split into readable sections. Shared by the on-screen renderer and the PDF export so both agree on what a "section" is. */
+function parseReportSections(text: string): { title: string; body: string }[] {
+  return text
     .split(/\n(?=##\s)/)
     .map((s) => s.trim())
     .filter(Boolean)
+    .map((section) => {
+      const [titleLine, ...rest] = section.replace(/^##\s*/, '').split('\n')
+      return { title: titleLine.trim(), body: rest.join('\n').trim() }
+    })
+}
 
-  return sections.map((section, i) => {
-    const [titleLine, ...rest] = section.replace(/^##\s*/, '').split('\n')
-    const body = rest.join('\n').trim()
+function renderReport(text: string) {
+  return parseReportSections(text).map((section, i) => {
     return (
       <div key={i} className="mb-6 last:mb-0">
         <h3 className="text-[14px] font-semibold mb-2 pb-2 border-b border-[#E8E8E8]">
-          {titleLine.trim()}
+          {section.title}
         </h3>
-        {body.split(/\n\n+/).map((para, j) => (
+        {section.body.split(/\n\n+/).map((para, j) => (
           <p key={j} className="text-[13px] text-[#555555] leading-[1.7] mb-2 last:mb-0">
             {para.trim()}
           </p>
@@ -154,6 +184,80 @@ function renderReport(text: string) {
       </div>
     )
   })
+}
+
+function downloadReportPdf(reportText: string, picks: BuilderPart[], total: number) {
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' })
+  const margin = 48
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const maxWidth = pageWidth - margin * 2
+  let y = margin
+
+  function ensureSpace(lineHeight: number) {
+    if (y + lineHeight > pageHeight - margin) {
+      doc.addPage()
+      y = margin
+    }
+  }
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(20)
+  doc.text('Custom PC Build Report', margin, y)
+  y += 22
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(10)
+  doc.setTextColor(130)
+  doc.text(new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }), margin, y)
+  y += 28
+  doc.setTextColor(0)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(12)
+  doc.text('Build Summary', margin, y)
+  y += 18
+
+  doc.setFontSize(10)
+  for (const p of picks) {
+    const nameLines = doc.splitTextToSize(p.name, maxWidth - 180) as string[]
+    const rowHeight = Math.max(16, nameLines.length * 12)
+    ensureSpace(rowHeight)
+    doc.setFont('helvetica', 'normal')
+    doc.text(p.category, margin, y)
+    doc.text(nameLines, margin + 100, y)
+    doc.text(p.price, pageWidth - margin, y, { align: 'right' })
+    y += rowHeight
+  }
+  y += 6
+  ensureSpace(20)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Total', margin, y)
+  doc.text(`$${total.toLocaleString()}`, pageWidth - margin, y, { align: 'right' })
+  y += 32
+
+  for (const section of parseReportSections(reportText)) {
+    ensureSpace(30)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(13)
+    doc.text(section.title, margin, y)
+    y += 18
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(10.5)
+    for (const para of section.body.split(/\n\n+/)) {
+      const lines = doc.splitTextToSize(para.trim(), maxWidth) as string[]
+      for (const line of lines) {
+        ensureSpace(14)
+        doc.text(line, margin, y)
+        y += 14
+      }
+      y += 8
+    }
+    y += 6
+  }
+
+  doc.save('pc-build-report.pdf')
 }
 
 export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
@@ -388,8 +492,11 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
           <div className="border border-[#E8E8E8] rounded-2xl flex flex-col h-[560px]">
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
               {messages.map((m, i) => (
-                <div
+                <motion.div
                   key={i}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
                   className={`max-w-[85%] text-[13px] leading-[1.6] px-4 py-3 rounded-2xl ${
                     m.role === 'user'
                       ? 'self-end bg-[#0A0A0A] text-white rounded-br-sm'
@@ -397,13 +504,20 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
                   }`}
                 >
                   {m.text}
-                </div>
+                </motion.div>
               ))}
-              {isLoading && (
-                <div className="self-start bg-[#F4F4F4] text-[#BBBBBB] text-[13px] px-4 py-3 rounded-2xl rounded-bl-sm">
-                  Thinking…
-                </div>
-              )}
+              <AnimatePresence>
+                {isLoading && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="self-start bg-[#F4F4F4] text-[13px] px-4 py-3 rounded-2xl rounded-bl-sm"
+                  >
+                    <TypingDots />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             <div className="border-t border-[#E8E8E8] p-4">
@@ -448,45 +562,75 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
 
           {/* Recommendation panel */}
           <div>
+            <AnimatePresence mode="wait">
             {!recommendation ? (
-              <div className="h-full min-h-[300px] border border-dashed border-[#E8E8E8] rounded-2xl flex items-center justify-center text-center px-5 sm:px-8">
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="h-full min-h-[300px] border border-dashed border-[#E8E8E8] rounded-2xl flex items-center justify-center text-center px-5 sm:px-8"
+              >
                 <p className="text-[13px] text-[#BBBBBB] max-w-[280px]">
                   Your recommended build will show up here once you tell the assistant what you're
                   looking for.
                 </p>
-              </div>
+              </motion.div>
             ) : (
-              <div>
+              <motion.div key="build" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}>
                 <div className="flex items-baseline justify-between mb-6">
                   <h2 className="text-[20px] font-semibold tracking-[-0.01em]">Recommended Build</h2>
-                  <p className="text-[20px] font-bold">${recommendation.total.toLocaleString()}</p>
+                  <motion.p
+                    key={recommendation.total}
+                    initial={{ opacity: 0.4 }}
+                    animate={{ opacity: 1 }}
+                    className="text-[20px] font-bold"
+                  >
+                    ${recommendation.total.toLocaleString()}
+                  </motion.p>
                 </div>
 
-                {recommendation.budget != null &&
-                  recommendation.total > recommendation.budget * OVER_BUDGET_TOLERANCE && (
-                    <div className="mb-4 flex items-start gap-2 rounded-xl border border-[#E8A5A5] bg-[#FEF1F1] px-4 py-3">
-                      <span className="text-[#C23A3A] flex-shrink-0 mt-0.5">
+                <AnimatePresence>
+                  {recommendation.budget != null &&
+                    recommendation.total > recommendation.budget * OVER_BUDGET_TOLERANCE && (
+                      <motion.div
+                        key="over-budget"
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                        className="mb-4 flex items-start gap-2 rounded-xl border border-[#E8A5A5] bg-[#FEF1F1] px-4 py-3 overflow-hidden"
+                      >
+                        <span className="text-[#C23A3A] flex-shrink-0 mt-0.5">
+                          <IconWarning />
+                        </span>
+                        <p className="text-[12px] text-[#8F2E2E] leading-[1.5]">
+                          <span className="font-semibold">Over budget — </span>
+                          This build is ${(recommendation.total - recommendation.budget).toLocaleString()} over
+                          your ${recommendation.budget.toLocaleString()} budget.
+                        </p>
+                      </motion.div>
+                    )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {recommendation.bottleneck && (
+                    <motion.div
+                      key="bottleneck"
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                      className="mb-4 flex items-start gap-2 rounded-xl border border-[#FDBA74] bg-[#FFF7ED] px-4 py-3 overflow-hidden"
+                    >
+                      <span className="text-[#EA580C] flex-shrink-0 mt-0.5">
                         <IconWarning />
                       </span>
-                      <p className="text-[12px] text-[#8F2E2E] leading-[1.5]">
-                        <span className="font-semibold">Over budget — </span>
-                        This build is ${(recommendation.total - recommendation.budget).toLocaleString()} over
-                        your ${recommendation.budget.toLocaleString()} budget.
+                      <p className="text-[12px] text-[#9A3412] leading-[1.5]">
+                        <span className="font-semibold">Possible bottleneck — </span>
+                        {recommendation.bottleneck.message}
                       </p>
-                    </div>
+                    </motion.div>
                   )}
-
-                {recommendation.bottleneck && (
-                  <div className="mb-4 flex items-start gap-2 rounded-xl border border-[#FDBA74] bg-[#FFF7ED] px-4 py-3">
-                    <span className="text-[#EA580C] flex-shrink-0 mt-0.5">
-                      <IconWarning />
-                    </span>
-                    <p className="text-[12px] text-[#9A3412] leading-[1.5]">
-                      <span className="font-semibold">Possible bottleneck — </span>
-                      {recommendation.bottleneck.message}
-                    </p>
-                  </div>
-                )}
+                </AnimatePresence>
 
                 {recommendation.fpsEstimates && recommendation.fpsEstimates.length > 0 && (
                   <div className="mb-6 border border-[#E8E8E8] rounded-xl p-4">
@@ -520,7 +664,13 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
 
                 <div className="flex flex-col gap-3">
                   {recommendation.picks.map((item, i) => (
-                    <div key={item.category}>
+                    <motion.div
+                      key={item.category}
+                      layout
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3, delay: Math.min(i, 6) * 0.04, ease: [0.22, 1, 0.36, 1] }}
+                    >
                       <div className="flex items-center gap-2 border border-[#E8E8E8] rounded-xl p-3 group">
                         <button
                           type="button"
@@ -559,8 +709,15 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
                         </button>
                       </div>
 
+                      <AnimatePresence>
                       {swapOpenFor === i && (
-                        <div className="mt-2 border border-[#E8E8E8] rounded-xl overflow-hidden">
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                          className="mt-2 border border-[#E8E8E8] rounded-xl overflow-hidden"
+                        >
                           <div className="flex items-center gap-2 border-b border-[#E8E8E8] px-3 py-2 bg-[#FAFAFA]">
                             <span className="text-[#BBBBBB] flex-shrink-0">
                               <IconSearch />
@@ -616,33 +773,47 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
                               ))
                             )}
                           </div>
-                        </div>
+                        </motion.div>
                       )}
-                    </div>
+                      </AnimatePresence>
+                    </motion.div>
                   ))}
                 </div>
                 <OutlineButton className="mt-8" onClick={handleGenerateReport} disabled={reportLoading}>
                   {reportLoading ? 'Generating report…' : 'Report'}
                 </OutlineButton>
-              </div>
+              </motion.div>
             )}
+            </AnimatePresence>
           </div>
         </div>
       </div>
 
-      {selectedProduct && (
-        <ProductModal product={selectedProduct} onClose={() => setSelectedProduct(null)} />
-      )}
+      <AnimatePresence>
+        {selectedProduct && (
+          <ProductModal key="product-modal" product={selectedProduct} onClose={() => setSelectedProduct(null)} />
+        )}
+      </AnimatePresence>
 
-      {reportOpen && (
-        <div
+      <AnimatePresence>
+        {reportOpen && (
+        <motion.div
+          key="report-modal-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 sm:p-6"
           onClick={() => setReportOpen(false)}
           role="dialog"
           aria-modal="true"
           aria-label="Build report"
         >
-          <div
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="bg-white w-full max-w-[640px] max-h-[85vh] overflow-y-auto rounded-2xl p-6 sm:p-8"
             onClick={(e) => e.stopPropagation()}
           >
@@ -657,28 +828,50 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
                   </p>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => setReportOpen(false)}
-                aria-label="Close"
-                className="text-[#BBBBBB] hover:text-[#0A0A0A] transition-colors flex-shrink-0"
-              >
-                <IconClose />
-              </button>
+              <div className="flex items-center gap-4 flex-shrink-0">
+                {!reportLoading && !reportError && reportText && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadReportPdf(reportText, recommendation?.picks ?? [], recommendation?.total ?? 0)
+                    }
+                    className="flex items-center gap-1.5 text-[12px] font-medium text-[#0A0A0A] hover:opacity-60 transition-opacity"
+                  >
+                    <IconDownload />
+                    Download PDF
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setReportOpen(false)}
+                  aria-label="Close"
+                  className="text-[#BBBBBB] hover:text-[#0A0A0A] transition-colors"
+                >
+                  <IconClose />
+                </button>
+              </div>
             </div>
 
-            {reportLoading ? (
-              <p className="text-[13px] text-[#888888]">Researching each part — this can take a moment…</p>
-            ) : reportError ? (
-              <p className="text-[13px] text-[#888888]">
-                Sorry, something went wrong generating the report. Mind trying again?
-              </p>
-            ) : (
-              reportText && renderReport(reportText)
-            )}
-          </div>
-        </div>
-      )}
+            <AnimatePresence mode="wait">
+              {reportLoading ? (
+                <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-2">
+                  <TypingDots />
+                  <p className="text-[13px] text-[#888888]">Researching each part — this can take a moment…</p>
+                </motion.div>
+              ) : reportError ? (
+                <motion.p key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[13px] text-[#888888]">
+                  Sorry, something went wrong generating the report. Mind trying again?
+                </motion.p>
+              ) : (
+                <motion.div key="text" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                  {reportText && renderReport(reportText)}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        </motion.div>
+        )}
+      </AnimatePresence>
     </main>
   )
 }
