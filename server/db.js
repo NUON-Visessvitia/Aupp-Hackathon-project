@@ -87,6 +87,60 @@ export function getCandidates({ budget, platform, tag, perCategory = 15 }) {
   ].map(rowToPart)
 }
 
+const byCategoryOrderedStmt = db.prepare('SELECT * FROM parts WHERE category = ? ORDER BY price ASC')
+const motherboardsBySocketsOrderedStmt = (count) =>
+  db.prepare(
+    `SELECT * FROM parts WHERE category = 'Motherboard' AND socket IN (${Array(count).fill('?').join(',')}) ORDER BY price ASC`,
+  )
+
+/** Evenly-spaced picks across an already price-sorted array, so a fixed-size shortlist still spans the full cheap-to-expensive range instead of clustering near one end. */
+function spreadSample(rows, count) {
+  if (rows.length <= count) return rows
+  const step = rows.length / count
+  const out = []
+  for (let i = 0; i < count; i++) out.push(rows[Math.floor(i * step)])
+  return out
+}
+
+/**
+ * Budget-agnostic candidate shortlist spanning the full price range per
+ * category, unlike getCandidates above which needs the user's budget known
+ * in advance to center each category's price target. This lets the
+ * build-chat endpoint extract intent (budget, platform, ...) AND pick parts
+ * in a single model call instead of two — the model reads the budget out of
+ * the conversation itself and picks whichever spread-sampled parts actually
+ * fit it. Motherboards are still constrained to sockets present among the
+ * CPU catalog so a compatible pair always exists to choose from.
+ */
+export function getCandidatesSpread({ perCategory = 20 } = {}) {
+  const cpuAll = byCategoryOrderedStmt.all('CPU')
+  const cpuRows = spreadSample(cpuAll, perCategory)
+
+  const sockets = [...new Set(cpuAll.map((r) => r.socket).filter(Boolean))]
+  const moboAll = sockets.length
+    ? motherboardsBySocketsOrderedStmt(sockets.length).all(...sockets)
+    : byCategoryOrderedStmt.all('Motherboard')
+  const moboRows = spreadSample(moboAll, perCategory)
+
+  const gpuRows = spreadSample(byCategoryOrderedStmt.all('GPU'), perCategory)
+  const ramRows = spreadSample(byCategoryOrderedStmt.all('RAM'), perCategory)
+  const caseRows = spreadSample(byCategoryOrderedStmt.all('PC Case'), perCategory)
+  const coolingRows = spreadSample(byCategoryOrderedStmt.all('Cooling'), perCategory)
+  const storageRows = spreadSample(byCategoryOrderedStmt.all('Storage'), perCategory)
+  const psuRows = spreadSample(byCategoryOrderedStmt.all('Power Supply'), perCategory)
+
+  return [
+    ...cpuRows,
+    ...moboRows,
+    ...gpuRows,
+    ...ramRows,
+    ...caseRows,
+    ...coolingRows,
+    ...storageRows,
+    ...psuRows,
+  ].map(rowToPart)
+}
+
 export function getPartsByIds(ids) {
   if (!ids.length) return []
   const rows = byIdsStmt(ids.length).all(...ids)

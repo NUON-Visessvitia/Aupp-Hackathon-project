@@ -2,7 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { GoogleGenAI } from '@google/genai'
-import { getCandidates, getPartsByIds, getAlternatives, searchPartsByName, getPricePercentile } from './db.js'
+import { getCandidatesSpread, getPartsByIds, getAlternatives, getPricePercentile } from './db.js'
 import { estimateFps } from './benchmarks.js'
 
 const app = express()
@@ -119,7 +119,12 @@ app.post('/api/chat', async (req, res) => {
 
 const BUILD_CATEGORIES = ['PC Case', 'Motherboard', 'CPU', 'GPU', 'RAM', 'Cooling', 'Storage', 'Power Supply']
 
-const BUILD_PICKS_SCHEMA = {
+// Combines what used to be two separate schemas/calls (extract intent, then
+// pick parts) into one — the model both reads budget/platform/tag/resolution
+// out of the conversation AND picks parts in the same response, since the
+// candidate catalog is now budget-agnostic (see getCandidatesSpread) and no
+// longer needs the budget known in advance to build.
+const BUILD_RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
     reply: {
@@ -132,13 +137,6 @@ const BUILD_PICKS_SCHEMA = {
         'Catalog ids for the recommended build, one per decided category. Leave empty while still asking clarifying questions.',
       items: { type: 'integer' },
     },
-  },
-  required: ['reply', 'picks'],
-}
-
-const INTENT_SCHEMA = {
-  type: 'object',
-  properties: {
     budget: {
       type: 'integer',
       description:
@@ -159,41 +157,8 @@ const INTENT_SCHEMA = {
       enum: ['1080p', '1440p', '4K', 'none'],
       description: 'Target gaming resolution, or "none" if unspecified.',
     },
-    requestedGpuModel: {
-      type: 'string',
-      description:
-        'If the user named a SPECIFIC GPU model (e.g. "RTX 5090", "the 4070 Ti", "9070 XT"), that model name normalized like "RTX 5090". Empty string if none was mentioned.',
-    },
   },
-  required: ['budget', 'platform', 'tag', 'resolution', 'requestedGpuModel'],
-}
-
-/**
- * Understands what the user actually means, however they phrased it —
- * replaces what used to be a pile of regexes (one per phrasing anyone
- * happened to try) with an actual LLM read of the conversation. Costs a
- * second model call per message, but that's the point of using an LLM here
- * instead of pattern-matching: "no budget needed", "cash isn't an issue",
- * "spare no expense" etc. all just work without being individually anticipated.
- */
-async function extractIntent(messages) {
-  const contents = messages.map((m) => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }))
-
-  const response = await genAI.models.generateContent({
-    model: 'gemini-3.5-flash-lite',
-    contents,
-    config: {
-      systemInstruction:
-        'Extract structured build-request parameters from this PC-building conversation. Interpret natural, flexible phrasing generously — people describe budgets, platform preferences, and use cases in many different ways; understand the intent rather than requiring exact keywords.',
-      responseMimeType: 'application/json',
-      responseSchema: INTENT_SCHEMA,
-    },
-  })
-
-  return JSON.parse(response.text)
+  required: ['reply', 'picks', 'budget', 'platform', 'tag', 'resolution'],
 }
 
 // How big a gap in price-percentile-within-category (0-1) between the CPU
@@ -252,35 +217,10 @@ app.post('/api/build-chat', async (req, res) => {
     return res.status(400).json({ error: 'messages must be a non-empty array' })
   }
 
-  // If this first call fails (network hiccup, transient API error), fall
-  // back to "no signal detected" rather than hard-failing the whole request
-  // — worst case the model just asks its usual clarifying question.
-  let intent = { budget: 0, platform: 'none', tag: 'none', resolution: 'none', requestedGpuModel: '' }
-  try {
-    intent = await extractIntent(messages)
-  } catch (err) {
-    console.error('extractIntent failed:', err)
-  }
-
-  const budget = intent.budget > 0 ? intent.budget : null
-  const platform = intent.platform !== 'none' ? intent.platform : null
-  const tag = intent.tag !== 'none' ? intent.tag : null
-  const resolution = intent.resolution !== 'none' ? intent.resolution : null
-
-  // No budget yet → send an empty catalog so the model can't invent picks and
-  // has to ask the clarifying question the system prompt tells it to.
-  const candidates = budget ? getCandidates({ budget, platform, tag }) : []
-
-  // The budget-driven shortlist above only covers what's price-appropriate —
-  // a specifically-named card (e.g. "the 5090") can be real but way outside
-  // that range, so it'd otherwise never appear and the model would wrongly
-  // conclude it doesn't exist. Search for it directly and merge it in.
-  if (intent.requestedGpuModel) {
-    const matches = searchPartsByName({ category: 'GPU', query: intent.requestedGpuModel })
-    for (const match of matches) {
-      if (!candidates.some((c) => c.id === match.id)) candidates.push(match)
-    }
-  }
+  // Spans the full price range per category rather than being centered on a
+  // budget — the model doesn't know the budget yet at this point, since
+  // extracting it is no longer a separate call (see BUILD_RESPONSE_SCHEMA).
+  const candidates = getCandidatesSpread()
 
   // The build already on screen — including anything the user manually
   // swapped in via the UI, which won't necessarily be near the budget-driven
@@ -307,7 +247,9 @@ Once you have enough information, always return a full set of picks (one id per 
 Keep replies short (2-4 sentences), friendly, and specific about why the parts fit the stated budget and use case — cite at least one concrete spec from the catalog that matters for that use case (e.g. core count and RAM for video editing/rendering, VRAM and clock speed for gaming, upload-friendly cooling and storage speed for streaming), not just generic praise like "powerful" or "great performance."
 Do NOT name a specific CPU or GPU model in your reply text (e.g. don't write "the Core Ultra 9 285K" or "the RTX 5090") — only describe them generically ("the processor", "the graphics card"). The exact part names are shown separately in the UI and will be appended automatically; naming one yourself risks describing a different part than the one you actually picked.${currentBuildNote}
 
-IMPORTANT: the catalog below is a budget-appropriate shortlist from a much larger inventory, not the complete list of everything in stock. If the user asks about a specific product and it's not in the catalog, that almost always means it's real but doesn't fit their current budget — say so and quote what it would actually cost if you can tell from context, or suggest raising the budget. Never claim a well-known, real product is "out of stock," "unavailable," or "doesn't exist" just because it isn't in this shortlist.
+Also read the user's budget, platform preference, aesthetic/acoustic tag, and target resolution out of the conversation so far, and return them in "budget"/"platform"/"tag"/"resolution" — interpret natural, flexible phrasing generously (e.g. "no budget"/"money is no object" → a generous but sensible figure like 3500; budget-conscious framing with no number → a modest default like 1200; budget 0 only if the conversation gives no signal at all about spending).
+
+IMPORTANT: the catalog below is a shortlist spanning the full price range of a much larger inventory, not the complete list of everything in stock — it may not include every specific named product. If the user asks about a specific product and it's not in the catalog, that almost always means it's real but just isn't in this shortlist — say so and quote what it would actually cost if you can tell from context, or suggest raising the budget. Never claim a well-known, real product is "out of stock," "unavailable," or "doesn't exist" just because it isn't in this shortlist.
 
 Catalog:
 ${JSON.stringify(candidates)}`
@@ -324,11 +266,14 @@ ${JSON.stringify(candidates)}`
       config: {
         systemInstruction,
         responseMimeType: 'application/json',
-        responseSchema: BUILD_PICKS_SCHEMA,
+        responseSchema: BUILD_RESPONSE_SCHEMA,
       },
     })
 
     const parsed = JSON.parse(response.text)
+    const budget = parsed.budget > 0 ? parsed.budget : null
+    const resolution = parsed.resolution && parsed.resolution !== 'none' ? parsed.resolution : null
+
     let picks = getPartsByIds(parsed.picks ?? [])
 
     // The model has occasionally returned more than one id for the same
