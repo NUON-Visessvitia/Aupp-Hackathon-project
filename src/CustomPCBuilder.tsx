@@ -48,6 +48,12 @@ const IconWarning = ({ size = 14 }: { size?: number }) => (
   </svg>
 )
 
+const IconChat = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  </svg>
+)
+
 const IconDownload = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -489,7 +495,23 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
 
         <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-10">
           {/* Chat panel */}
-          <div className="border border-[#E8E8E8] rounded-2xl flex flex-col h-[560px]">
+          <div className="border-2 border-[#0A0A0A] rounded-2xl flex flex-col h-[560px] shadow-[0_16px_50px_-16px_rgba(0,0,0,0.25)] bg-white overflow-hidden">
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-[#E8E8E8] bg-[#0A0A0A] text-white flex-shrink-0">
+              <span className="w-8 h-8 rounded-full bg-[#F97316] flex items-center justify-center flex-shrink-0">
+                <IconChat />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold leading-tight">Build Assistant</p>
+                <p className="text-[11px] text-[#BBBBBB] flex items-center gap-1.5 leading-tight mt-0.5">
+                  <motion.span
+                    className="w-1.5 h-1.5 rounded-full bg-[#22C55E] inline-block"
+                    animate={{ opacity: [1, 0.4, 1] }}
+                    transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                  Online — ask anything PC related
+                </p>
+              </div>
+            </div>
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
               {messages.map((m, i) => (
                 <motion.div
