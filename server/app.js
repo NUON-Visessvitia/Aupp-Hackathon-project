@@ -2,7 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { GoogleGenAI } from '@google/genai'
-import { getCandidatesSpread, getPartsByIds, getAlternatives, getPricePercentile } from './db.js'
+import { getCandidates, getCandidatesSpread, getPartsByIds, getAlternatives, getPricePercentile } from './db.js'
 import { estimateFps } from './benchmarks.js'
 
 const app = express()
@@ -172,6 +172,27 @@ function parsePriceNum(price) {
   return Number(price.replace(/[^0-9.]/g, ''))
 }
 
+// A cheap, local stand-in for full intent extraction — only used to decide
+// how to SHAPE the candidate catalog (proportionally around a budget vs.
+// spread across the whole range), never as the authoritative budget shown to
+// the user. Requires an adjacent "$" so it doesn't false-match resolution
+// figures like "4K" or "1440p gaming" as a dollar amount.
+function roughBudgetGuess(messages) {
+  const text = messages.map((m) => m.content).join(' ')
+  const pattern = /\$\s?(\d[\d,]*(?:\.\d+)?)\s?(k)?|(\d[\d,]*(?:\.\d+)?)\s?(k)?\s?\$/gi
+  let best = null
+  for (const m of text.matchAll(pattern)) {
+    const raw = m[1] ?? m[3]
+    const hasK = Boolean(m[2] ?? m[4])
+    let num = Number(raw.replace(/,/g, ''))
+    if (hasK) num *= 1000
+    if (Number.isFinite(num) && num >= 100 && num <= 20000) {
+      if (best === null || num > best) best = num
+    }
+  }
+  return best
+}
+
 /**
  * Approximates a CPU/GPU tier mismatch using each part's price-percentile
  * within its own category as a stand-in for performance tier — there's no
@@ -217,10 +238,20 @@ app.post('/api/build-chat', async (req, res) => {
     return res.status(400).json({ error: 'messages must be a non-empty array' })
   }
 
-  // Spans the full price range per category rather than being centered on a
-  // budget — the model doesn't know the budget yet at this point, since
-  // extracting it is no longer a separate call (see BUILD_RESPONSE_SCHEMA).
-  const candidates = getCandidatesSpread()
+  // The real budget still comes from the model's own extraction (see
+  // BUILD_RESPONSE_SCHEMA) — that no longer happens in a separate call, so
+  // it isn't known yet at this point. But a rough local guess is enough to
+  // shape the catalog proportionally the way getCandidates always has
+  // (~32% of budget on the GPU, ~18% on the CPU, etc.) instead of an
+  // unweighted spread across the whole price range, which was producing
+  // wildly mismatched pairs (e.g. a $74 CPU next to a $965 GPU) once nothing
+  // nudged picks toward the stated budget. Falls back to the full spread
+  // only when no dollar figure could be found at all (e.g. "money's no
+  // object").
+  const roughBudget = roughBudgetGuess(messages)
+  const candidates = roughBudget
+    ? getCandidates({ budget: roughBudget, perCategory: 20 })
+    : getCandidatesSpread({ perCategory: 20 })
 
   // The build already on screen — including anything the user manually
   // swapped in via the UI, which won't necessarily be near the budget-driven
@@ -249,7 +280,7 @@ Do NOT name a specific CPU or GPU model in your reply text (e.g. don't write "th
 
 Also read the user's budget, platform preference, aesthetic/acoustic tag, and target resolution out of the conversation so far, and return them in "budget"/"platform"/"tag"/"resolution" — interpret natural, flexible phrasing generously (e.g. "no budget"/"money is no object" → a generous but sensible figure like 3500; budget-conscious framing with no number → a modest default like 1200; budget 0 only if the conversation gives no signal at all about spending).
 
-IMPORTANT: the catalog below is a shortlist spanning the full price range of a much larger inventory, not the complete list of everything in stock — it may not include every specific named product. If the user asks about a specific product and it's not in the catalog, that almost always means it's real but just isn't in this shortlist — say so and quote what it would actually cost if you can tell from context, or suggest raising the budget. Never claim a well-known, real product is "out of stock," "unavailable," or "doesn't exist" just because it isn't in this shortlist.
+IMPORTANT: the catalog below is a shortlist from a much larger inventory, not the complete list of everything in stock — it may not include every specific named product. If the user asks about a specific product and it's not in the catalog, that almost always means it's real but just isn't in this shortlist — say so and quote what it would actually cost if you can tell from context, or suggest raising the budget. Never claim a well-known, real product is "out of stock," "unavailable," or "doesn't exist" just because it isn't in this shortlist.
 
 Catalog:
 ${JSON.stringify(candidates)}`
