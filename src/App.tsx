@@ -71,7 +71,7 @@ const IconClose = () => (
 // ── Data ──────────────────────────────────────────────────────────────────────
 
 const NAV_LINKS: { label: string; items: string[] | null }[] = [
-  { label: "Gaming PCs", items: null },
+  { label: "Komponent AI", items: null },
   { label: "Components", items: COMPONENT_CATEGORIES },
   { label: "Peripherals", items: ["Keyboards", "Mice", "Monitors", "Headsets"] },
   { label: "News", items: null },
@@ -361,49 +361,49 @@ function Nav({
             transition={{ duration: 0.2, ease: "easeOut" }}
             className="md:hidden border-t border-[#E8E8E8] bg-white px-5 sm:px-8 max-h-[calc(100vh-56px)] overflow-y-auto overflow-x-hidden"
           >
-          <div className="flex flex-col gap-6 py-5">
-            {NAV_LINKS.map((link) =>
-              link.items ? (
-                <div key={link.label}>
-                  <p className="text-[11px] tracking-[0.08em] uppercase text-[#BBBBBB] mb-2.5">
-                    {link.label}
-                  </p>
-                  <div className="flex flex-col gap-1">
-                    {link.items.map((item) => {
-                      const isComponents = link.label === "Components"
-                      const isActive = isComponents && activeComponentFilter === item
-                      return (
-                        <button
-                          key={item}
-                          type="button"
-                          onClick={() => {
-                            if (isComponents) onSelectComponentFilter(item)
-                            setMobileMenuOpen(false)
-                          }}
-                          className={`text-left text-[14px] py-1.5 transition-colors ${isActive ? "text-[#0A0A0A] font-medium" : "text-[#555555] hover:text-[#0A0A0A]"
-                            }`}
-                        >
-                          {item}
-                        </button>
-                      )
-                    })}
+            <div className="flex flex-col gap-6 py-5">
+              {NAV_LINKS.map((link) =>
+                link.items ? (
+                  <div key={link.label}>
+                    <p className="text-[11px] tracking-[0.08em] uppercase text-[#BBBBBB] mb-2.5">
+                      {link.label}
+                    </p>
+                    <div className="flex flex-col gap-1">
+                      {link.items.map((item) => {
+                        const isComponents = link.label === "Components"
+                        const isActive = isComponents && activeComponentFilter === item
+                        return (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => {
+                              if (isComponents) onSelectComponentFilter(item)
+                              setMobileMenuOpen(false)
+                            }}
+                            className={`text-left text-[14px] py-1.5 transition-colors ${isActive ? "text-[#0A0A0A] font-medium" : "text-[#555555] hover:text-[#0A0A0A]"
+                              }`}
+                          >
+                            {item}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <button
-                  key={link.label}
-                  type="button"
-                  onClick={() => {
-                    if (link.label === "Gaming PCs") onOpenCustomPC()
-                    setMobileMenuOpen(false)
-                  }}
-                  className="text-left text-[15px] font-medium text-[#0A0A0A]"
-                >
-                  {link.label}
-                </button>
-              ),
-            )}
-          </div>
+                ) : (
+                  <button
+                    key={link.label}
+                    type="button"
+                    onClick={() => {
+                      if (link.label === "Gaming PCs") onOpenCustomPC()
+                      setMobileMenuOpen(false)
+                    }}
+                    className="text-left text-[15px] font-medium text-[#0A0A0A]"
+                  >
+                    {link.label}
+                  </button>
+                ),
+              )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
