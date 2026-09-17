@@ -2,7 +2,15 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { GoogleGenAI } from '@google/genai'
-import { getCandidates, getCandidatesSpread, getPartsByIds, getAlternatives, getPricePercentile } from './db.js'
+import {
+  getCandidates,
+  getCandidatesSpread,
+  getPartsByIds,
+  getAlternatives,
+  getPricePercentile,
+  getRamByDdrGeneration,
+  getCheapestInCategory,
+} from './db.js'
 import { estimateFps } from './benchmarks.js'
 
 const app = express()
@@ -231,6 +239,177 @@ function detectBottleneck(picks, resolution) {
   return null
 }
 
+// Which DDR generation a socket requires. The source dataset doesn't record
+// a motherboard's supported memory type, so this is derived from socket
+// instead. LGA1700 boards exist in both DDR4 and DDR5 variants with no way
+// to tell them apart in this data, so it's deliberately left out — better to
+// not enforce a constraint than to enforce a wrong one.
+const RAM_DDR_BY_SOCKET = { AM4: 'DDR4', AM5: 'DDR5', LGA1851: 'DDR5' }
+
+function ramDdrGeneration(ramPart) {
+  const speed = ramPart.specs.find(([label]) => label === 'Speed')?.[1]
+  return speed?.match(/^DDR\d/)?.[0] ?? null
+}
+
+/**
+ * The model occasionally pairs RAM of the wrong DDR generation with the
+ * chosen platform (e.g. DDR4 RAM with an AM5 build) — not a "maybe" either,
+ * same reasoning as the CPU/Motherboard socket fix above.
+ */
+function fixRamGeneration(picks, candidates) {
+  const moboPick = picks.find((p) => p.category === 'Motherboard')
+  const requiredGen = moboPick ? RAM_DDR_BY_SOCKET[moboPick.socket] : null
+  if (!requiredGen) return picks
+
+  const ramPickIdx = picks.findIndex((p) => p.category === 'RAM')
+  if (ramPickIdx < 0) return picks
+  const ramPick = picks[ramPickIdx]
+  if (ramDdrGeneration(ramPick) === requiredGen) return picks
+
+  const fixedRam =
+    candidates.find((c) => c.category === 'RAM' && ramDdrGeneration(c) === requiredGen) ??
+    getRamByDdrGeneration({
+      ddrGeneration: requiredGen,
+      near: parsePriceNum(ramPick.price),
+      excludeId: ramPick.id,
+      limit: 1,
+    })[0]
+
+  if (!fixedRam) return picks
+  const fixed = [...picks]
+  fixed[ramPickIdx] = fixedRam
+  return fixed
+}
+
+/**
+ * Best-effort deterministic correction for a detected CPU/GPU bottleneck —
+ * the system prompt already asks the model to avoid this, but instructing
+ * an LLM isn't a guarantee, and the existing bottleneck check was purely
+ * advisory (a badge in the UI) with nothing actually preventing the mismatch.
+ * Only ever upgrades the weaker part (never downgrades the stronger one,
+ * which would change the build's intended performance tier), and only from
+ * the shortlist already sent to the model so it stays plausible for the
+ * budget. Skipped if the fix would blow past budget too — enforceBudget runs
+ * afterward and would otherwise just undo it.
+ */
+function fixBottleneck(picks, candidates, resolution, budget) {
+  const bottleneck = picks.length ? detectBottleneck(picks, resolution) : null
+  if (!bottleneck) return { picks, bottleneck }
+
+  const weakCategory = bottleneck.category
+  const strongCategory = weakCategory === 'CPU' ? 'GPU' : 'CPU'
+  const weakIdx = picks.findIndex((p) => p.category === weakCategory)
+  const weakPick = picks[weakIdx]
+  const strongPick = picks.find((p) => p.category === strongCategory)
+  if (!weakPick || !strongPick) return { picks, bottleneck }
+
+  const strongPct = getPricePercentile(strongCategory, parsePriceNum(strongPick.price))
+  const weakPrice = parsePriceNum(weakPick.price)
+
+  let options = candidates.filter((c) => c.category === weakCategory && parsePriceNum(c.price) > weakPrice)
+  if (weakCategory === 'CPU') {
+    const moboPick = picks.find((p) => p.category === 'Motherboard')
+    if (moboPick) options = options.filter((c) => c.socket === moboPick.socket)
+  }
+
+  let best = null
+  let bestDiff = Infinity
+  for (const option of options) {
+    const pct = getPricePercentile(weakCategory, parsePriceNum(option.price))
+    const diff = Math.abs(pct - strongPct)
+    if (diff < bestDiff) {
+      bestDiff = diff
+      best = option
+    }
+  }
+  if (!best) return { picks, bottleneck }
+
+  const total = picks.reduce((sum, p) => sum + parsePriceNum(p.price), 0)
+  const delta = parsePriceNum(best.price) - weakPrice
+  if (budget && total + delta > budget * 1.15) return { picks, bottleneck }
+
+  const fixedPicks = [...picks]
+  fixedPicks[weakIdx] = best
+  return { picks: fixedPicks, bottleneck: detectBottleneck(fixedPicks, resolution) }
+}
+
+// Categories ordered from least to most impactful to downgrade — cosmetic/
+// peripheral parts first, CPU/GPU (the parts the user's stated use case
+// actually depends on) only as a last resort.
+const BUDGET_DOWNGRADE_ORDER = [
+  'Cooling',
+  'PC Case',
+  'Storage',
+  'Power Supply',
+  'RAM',
+  'Motherboard',
+  'CPU',
+  'GPU',
+]
+
+// Same tolerance the frontend uses to decide whether to show the "over
+// budget" warning — no point enforcing a tighter number here than what's
+// actually flagged as a problem on screen.
+const BUDGET_TOLERANCE = 1.1
+
+/**
+ * The model reads a budget out of the conversation but nothing previously
+ * checked its own picks against it — candidates are only shaped to cluster
+ * *near* the budget's per-category proportions, not capped by it, so the
+ * model was free to combine several candidates that individually looked
+ * reasonable into a total well over what the user asked to spend. Downgrades
+ * one category at a time, cheapest-impact first, to the cheapest compatible
+ * alternative already in the candidate shortlist, stopping as soon as the
+ * total is back within tolerance. Falls back to a direct cheapest-in-category
+ * DB lookup when the candidate shortlist itself has nothing cheap enough left
+ * — that shortlist is shaped around a rough LOCAL budget guess (see
+ * roughBudgetGuess), which can undershoot the model's own extracted budget
+ * enough that even the cheapest shortlisted option per category still isn't
+ * cheap enough to close the gap.
+ */
+function enforceBudget(picks, candidates, budget) {
+  if (!budget) return picks
+
+  const result = [...picks]
+  let total = result.reduce((sum, p) => sum + parsePriceNum(p.price), 0)
+  if (total <= budget * BUDGET_TOLERANCE) return result
+
+  for (const category of BUDGET_DOWNGRADE_ORDER) {
+    if (total <= budget * BUDGET_TOLERANCE) break
+    const idx = result.findIndex((p) => p.category === category)
+    if (idx < 0) continue
+    const current = result[idx]
+    const currentPrice = parsePriceNum(current.price)
+    const mobo = result.find((p) => p.category === 'Motherboard')
+    const cpu = result.find((p) => p.category === 'CPU')
+    const socketConstraint =
+      category === 'CPU' ? mobo?.socket : category === 'Motherboard' ? cpu?.socket : undefined
+    const requiredRamGen = category === 'RAM' && mobo ? RAM_DDR_BY_SOCKET[mobo.socket] : null
+
+    let options = candidates.filter((c) => c.category === category && parsePriceNum(c.price) < currentPrice)
+    if (socketConstraint) options = options.filter((c) => c.socket === socketConstraint)
+    if (requiredRamGen) options = options.filter((c) => ramDdrGeneration(c) === requiredRamGen)
+
+    let cheapest = options.length
+      ? options.reduce((a, b) => (parsePriceNum(a.price) < parsePriceNum(b.price) ? a : b))
+      : null
+
+    if (!cheapest || parsePriceNum(cheapest.price) >= currentPrice) {
+      const fallback =
+        category === 'RAM' && requiredRamGen
+          ? getRamByDdrGeneration({ ddrGeneration: requiredRamGen, near: 0, excludeId: current.id, limit: 1 })[0]
+          : getCheapestInCategory({ category, socket: socketConstraint, limit: 1 })[0]
+      if (fallback && parsePriceNum(fallback.price) < currentPrice) cheapest = fallback
+    }
+
+    if (!cheapest) continue
+    total += parsePriceNum(cheapest.price) - currentPrice
+    result[idx] = cheapest
+  }
+
+  return result
+}
+
 app.post('/api/build-chat', async (req, res) => {
   const { messages, currentPicks } = req.body
 
@@ -273,6 +452,7 @@ If the user's latest message is a QUESTION about this current build (e.g. "does 
 Recommend a complete build using ONLY parts from the catalog below, referenced by their exact "id" — never invent parts, names, or specs.
 A complete build has exactly one pick from each of these categories: ${BUILD_CATEGORIES.join(', ')}.
 The CPU and Motherboard you pick must have matching "socket" values.
+Keep the CPU and GPU reasonably matched in performance tier for the stated use case — avoid pairing a budget-tier CPU with a high-end GPU (or the reverse) unless the user's budget genuinely can't do better, since a lopsided pairing leaves one part bottlenecking the other.
 Ask a short clarifying question (and return an empty "picks" array) if the user hasn't given you enough to work with yet — a budget and a use case (e.g. gaming resolution, streaming, editing) is enough to proceed.
 Once you have enough information, always return a full set of picks (one id per category) in the same response as your reply — don't describe the build in prose without also returning the picks.
 Keep replies short (2-4 sentences), friendly, and specific about why the parts fit the stated budget and use case — cite at least one concrete spec from the catalog that matters for that use case (e.g. core count and RAM for video editing/rendering, VRAM and clock speed for gaming, upload-friendly cooling and storage speed for streaming), not just generic praise like "powerful" or "great performance."
@@ -327,6 +507,42 @@ ${JSON.stringify(candidates)}`
       const fallback = candidates.find((c) => c.category === category)
       if (fallback) picks.push(fallback)
     }
+
+    // The model occasionally ignores the matching-socket instruction and
+    // names a CPU/Motherboard pair that can't physically go together — that's
+    // not a "maybe," so fix it deterministically instead of trusting the
+    // model to always get it right. Keep the CPU (the more use-case-driving
+    // pick) and re-pair the motherboard, same approach the frontend already
+    // uses when a manual swap breaks compatibility.
+    const cpuPickIdx = picks.findIndex((p) => p.category === 'CPU')
+    const moboPickIdx = picks.findIndex((p) => p.category === 'Motherboard')
+    if (cpuPickIdx >= 0 && moboPickIdx >= 0) {
+      const cpuPick = picks[cpuPickIdx]
+      const moboPick = picks[moboPickIdx]
+      if (cpuPick.socket && cpuPick.socket !== moboPick.socket) {
+        const fixedMobo =
+          candidates.find((c) => c.category === 'Motherboard' && c.socket === cpuPick.socket) ??
+          getAlternatives({
+            category: 'Motherboard',
+            excludeId: moboPick.id,
+            near: parsePriceNum(moboPick.price),
+            socket: cpuPick.socket,
+            limit: 1,
+          })[0]
+        if (fixedMobo) picks[moboPickIdx] = fixedMobo
+      }
+    }
+
+    // Same "not a maybe" reasoning as the socket fix above, applied to the
+    // other two ways a generated build has been coming out wrong: RAM of the
+    // wrong DDR generation for the chosen platform, and a CPU/GPU pairing
+    // lopsided enough to bottleneck one part. Order matters — bottleneck
+    // correction runs before budget enforcement so a budget-driven downgrade
+    // gets the final say on total cost, and enforceBudget's own socket/DDR
+    // filters keep whatever these two already fixed intact.
+    picks = fixRamGeneration(picks, candidates)
+    ;({ picks } = fixBottleneck(picks, candidates, resolution, budget))
+    picks = enforceBudget(picks, candidates, budget)
 
     const bottleneck = picks.length ? detectBottleneck(picks, resolution) : null
 

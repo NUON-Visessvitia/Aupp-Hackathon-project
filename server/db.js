@@ -50,6 +50,31 @@ function byPriceMaybeTag(category, tag, target, perCategory) {
   return byPriceStmt.all(category, target, perCategory)
 }
 
+// The scraped memory dataset isn't restricted to modern generations the way
+// the CPU/motherboard fetch already restricts sockets (see MODERN_SOCKETS in
+// seed.js) — over a third of its rows are DDR2/DDR3 kits that can't fit any
+// socket this store actually carries (AM4/AM5/LGA1700/LGA1851 all take DDR4
+// or DDR5 only). Filtering those out here means the LLM is never even
+// offered a RAM kit that could never be compatible with anything in the
+// catalog, rather than relying solely on catching it after the fact.
+const ramByPriceStmt = db.prepare(
+  `SELECT * FROM parts WHERE category = 'RAM' AND (specs LIKE '%"DDR4-%' OR specs LIKE '%"DDR5-%') ORDER BY ABS(price - ?) ASC LIMIT ?`,
+)
+const ramByPriceTagStmt = db.prepare(
+  `SELECT * FROM parts WHERE category = 'RAM' AND (specs LIKE '%"DDR4-%' OR specs LIKE '%"DDR5-%') AND tags LIKE '%' || ? || '%' ORDER BY ABS(price - ?) ASC LIMIT ?`,
+)
+const ramOrderedStmt = db.prepare(
+  `SELECT * FROM parts WHERE category = 'RAM' AND (specs LIKE '%"DDR4-%' OR specs LIKE '%"DDR5-%') ORDER BY price ASC`,
+)
+
+function ramByPriceMaybeTag(tag, target, perCategory) {
+  if (tag) {
+    const tagged = ramByPriceTagStmt.all(tag, target, perCategory)
+    if (tagged.length) return tagged
+  }
+  return ramByPriceStmt.all(target, perCategory)
+}
+
 /**
  * Builds a candidate shortlist per category for the LLM to choose from —
  * price-proximity ranked, optionally platform/tag filtered. Motherboards are
@@ -69,7 +94,7 @@ export function getCandidates({ budget, platform, tag, perCategory = 15 }) {
     : byPriceStmt.all('Motherboard', moboTarget, perCategory)
 
   const gpuRows = byPriceStmt.all('GPU', budget * 0.32, perCategory)
-  const ramRows = byPriceMaybeTag('RAM', tag, budget * 0.08, perCategory)
+  const ramRows = ramByPriceMaybeTag(tag, budget * 0.08, perCategory)
   const caseRows = byPriceMaybeTag('PC Case', tag, budget * 0.09, perCategory)
   const coolingRows = byPriceMaybeTag('Cooling', tag, budget * 0.07, perCategory)
   const storageRows = byPriceStmt.all('Storage', budget * 0.06, perCategory)
@@ -123,7 +148,7 @@ export function getCandidatesSpread({ perCategory = 20 } = {}) {
   const moboRows = spreadSample(moboAll, perCategory)
 
   const gpuRows = spreadSample(byCategoryOrderedStmt.all('GPU'), perCategory)
-  const ramRows = spreadSample(byCategoryOrderedStmt.all('RAM'), perCategory)
+  const ramRows = spreadSample(ramOrderedStmt.all(), perCategory)
   const caseRows = spreadSample(byCategoryOrderedStmt.all('PC Case'), perCategory)
   const coolingRows = spreadSample(byCategoryOrderedStmt.all('Cooling'), perCategory)
   const storageRows = spreadSample(byCategoryOrderedStmt.all('Storage'), perCategory)
@@ -175,6 +200,38 @@ export function getAlternatives({ category, excludeId, near, socket, query, limi
   const rows = socket
     ? alternativesBySocketStmt.all(category, socket, excludeId, near, limit)
     : alternativesStmt.all(category, excludeId, near, limit)
+  return rows.map(rowToPart)
+}
+
+const ramByDdrStmt = db.prepare(
+  `SELECT * FROM parts WHERE category = 'RAM' AND id != ? AND specs LIKE '%"' || ? || '-%' ORDER BY ABS(price - ?) ASC LIMIT ?`,
+)
+
+/**
+ * RAM alternatives constrained to a specific DDR generation (e.g. "DDR5").
+ * The source dataset doesn't record a motherboard's supported memory type,
+ * so generation compatibility is derived from socket instead (AM4 -> DDR4,
+ * AM5/LGA1851 -> DDR5) — see RAM_DDR_BY_SOCKET in app.js. Used to fix a RAM
+ * pick that doesn't match what the chosen platform actually takes.
+ */
+export function getRamByDdrGeneration({ ddrGeneration, near, excludeId = -1, limit = 5 }) {
+  return ramByDdrStmt.all(excludeId, ddrGeneration, near, limit).map(rowToPart)
+}
+
+const cheapestStmt = db.prepare('SELECT * FROM parts WHERE category = ? ORDER BY price ASC LIMIT ?')
+const cheapestBySocketStmt = db.prepare(
+  'SELECT * FROM parts WHERE category = ? AND socket = ? ORDER BY price ASC LIMIT ?',
+)
+
+/**
+ * The cheapest part(s) in a category (optionally socket-restricted) —
+ * a budget-enforcement fallback for when the candidate shortlist a build was
+ * generated from (shaped around a rough local budget guess, not necessarily
+ * the model's actual extracted budget) doesn't contain anything cheap enough
+ * to bring an over-budget build back down.
+ */
+export function getCheapestInCategory({ category, socket, limit = 5 }) {
+  const rows = socket ? cheapestBySocketStmt.all(category, socket, limit) : cheapestStmt.all(category, limit)
   return rows.map(rowToPart)
 }
 
