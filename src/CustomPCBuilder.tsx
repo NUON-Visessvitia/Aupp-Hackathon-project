@@ -83,6 +83,8 @@ export type BuilderPart = {
   platform?: 'AMD' | 'Intel'
   socket?: string
   tags?: string[]
+  /** Per-retailer prices for parts sourced from real storefronts — omitted for parts with a single canonical price. */
+  sources?: { site: string; price: number }[]
 }
 
 type Bottleneck = { category: 'CPU' | 'GPU'; message: string }
@@ -117,6 +119,21 @@ const ERROR_REPLY =
 
 function parsePrice(price: string): number {
   return Number(price.replace(/[^0-9.]/g, ''))
+}
+
+/** "$95–$99" when a part is genuinely sold at different prices across its known retailers, its single price otherwise. */
+function formatPriceDisplay(item: BuilderPart): string {
+  if (!item.sources || item.sources.length < 2) return item.price
+  const prices = item.sources.map((s) => s.price)
+  const min = Math.min(...prices)
+  const max = Math.max(...prices)
+  return min === max ? `$${min}` : `$${min}–$${max}`
+}
+
+/** Tooltip text spelling out which retailer has which price, for the range display above. */
+function sourcesTooltip(item: BuilderPart): string | undefined {
+  if (!item.sources || item.sources.length < 2) return undefined
+  return item.sources.map((s) => `${s.site}: $${s.price}`).join(' · ')
 }
 
 /** Pure deterministic math server-side — no LLM call, so this can run after every swap instead of only when a chat message happens to touch the build. */
@@ -715,7 +732,12 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
                               {item.name}
                             </p>
                           </div>
-                          <p className="text-[13px] font-medium whitespace-nowrap">{item.price}</p>
+                          <p
+                            className="text-[13px] font-medium whitespace-nowrap"
+                            title={sourcesTooltip(item)}
+                          >
+                            {formatPriceDisplay(item)}
+                          </p>
                         </button>
                         <button
                           type="button"

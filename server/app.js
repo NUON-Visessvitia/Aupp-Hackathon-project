@@ -273,16 +273,37 @@ function detectBottleneck(picks, resolution) {
   return null
 }
 
-// Which DDR generation a socket requires. The source dataset doesn't record
-// a motherboard's supported memory type, so this is derived from socket
-// instead. LGA1700 boards exist in both DDR4 and DDR5 variants with no way
-// to tell them apart in this data, so it's deliberately left out — better to
-// not enforce a constraint than to enforce a wrong one.
+// Fallback DDR generation per socket, used only when a motherboard's own
+// "Memory Type" spec isn't available (see requiredRamGeneration below).
+// LGA1700 boards genuinely exist in both DDR4 and DDR5 variants, so that
+// socket is deliberately left out here — without a real per-board answer,
+// not enforcing a constraint is safer than enforcing a wrong one.
 const RAM_DDR_BY_SOCKET = { AM4: 'DDR4', AM5: 'DDR5', LGA1851: 'DDR5' }
 
 function ramDdrGeneration(ramPart) {
   const speed = ramPart.specs.find(([label]) => label === 'Speed')?.[1]
   return speed?.match(/^DDR\d/)?.[0] ?? null
+}
+
+function moboDdrGeneration(moboPart) {
+  const stated = moboPart.specs.find(([label]) => label === 'Memory Type')?.[1]
+  return stated === 'DDR4' || stated === 'DDR5' ? stated : null
+}
+
+/**
+ * Most motherboards in the catalog now carry their own real "Memory Type"
+ * spec (see MOTHERBOARD_LISTINGS in seed.js — sourced straight from each
+ * listing's stated DDR4/DDR5 variant, not inferred), which is a strictly
+ * better source of truth than the socket-based guess: it's what finally
+ * makes LGA1700 boards checkable at all, since that socket alone doesn't
+ * determine DDR generation. Only falls back to the socket map for the
+ * handful of boards whose listing didn't state a memory type.
+ */
+function requiredRamGeneration(moboPick) {
+  if (!moboPick) return null
+  const stated = moboPick.specs.find(([label]) => label === 'Memory Type')?.[1]
+  if (stated === 'DDR4' || stated === 'DDR5') return stated
+  return RAM_DDR_BY_SOCKET[moboPick.socket] ?? null
 }
 
 /**
@@ -292,7 +313,7 @@ function ramDdrGeneration(ramPart) {
  */
 function fixRamGeneration(picks, candidates) {
   const moboPick = picks.find((p) => p.category === 'Motherboard')
-  const requiredGen = moboPick ? RAM_DDR_BY_SOCKET[moboPick.socket] : null
+  const requiredGen = requiredRamGeneration(moboPick)
   if (!requiredGen) return picks
 
   const ramPickIdx = picks.findIndex((p) => p.category === 'RAM')
@@ -381,10 +402,49 @@ const BUDGET_DOWNGRADE_ORDER = [
   'GPU',
 ]
 
+// Same per-category proportions getCandidates shapes the shortlist around
+// (see server/db.js) — reused here only as a floor, so a downgrade never
+// guts one category to whatever's globally cheapest (e.g. a $10 cooler)
+// while others go untouched. Cutting to half of a category's fair share is
+// still a real cut; going further than that starts to look less like "a
+// cheaper build" and more like a mismatched one (a $700 GPU next to a $20
+// SSD). If respecting this floor isn't enough to close the whole gap, the
+// build is left a bit over budget rather than forced into that mismatch —
+// the UI's own "over budget" banner already flags that honestly.
+const BUDGET_SHARE = {
+  CPU: 0.18,
+  Motherboard: 0.12,
+  GPU: 0.32,
+  RAM: 0.08,
+  'PC Case': 0.09,
+  Cooling: 0.07,
+  Storage: 0.06,
+  'Power Supply': 0.08,
+}
+
 // Same tolerance the frontend uses to decide whether to show the "over
 // budget" warning — no point enforcing a tighter number here than what's
 // actually flagged as a problem on screen.
 const BUDGET_TOLERANCE = 1.1
+
+/**
+ * From a pool of cheaper-than-current options, picks the mildest cut that's
+ * actually enough to bring the running total within tolerance on its own —
+ * not automatically the single cheapest option available, which would
+ * needlessly gut a category (e.g. swapping in a $10 cooler when a $50 one
+ * would already have closed the gap) and produce a lopsided-looking build
+ * even though the final total is technically in budget. Falls back to the
+ * cheapest option in the pool only when nothing in it is enough alone.
+ */
+function pickSufficientCut(options, currentPrice, runningTotal, budget) {
+  if (!options.length) return null
+  const sorted = [...options].sort((a, b) => parsePriceNum(b.price) - parsePriceNum(a.price))
+  for (const opt of sorted) {
+    const newTotal = runningTotal - currentPrice + parsePriceNum(opt.price)
+    if (newTotal <= budget * BUDGET_TOLERANCE) return opt
+  }
+  return sorted[sorted.length - 1]
+}
 
 /**
  * The model reads a budget out of the conversation but nothing previously
@@ -392,14 +452,11 @@ const BUDGET_TOLERANCE = 1.1
  * *near* the budget's per-category proportions, not capped by it, so the
  * model was free to combine several candidates that individually looked
  * reasonable into a total well over what the user asked to spend. Downgrades
- * one category at a time, cheapest-impact first, to the cheapest compatible
- * alternative already in the candidate shortlist, stopping as soon as the
- * total is back within tolerance. Falls back to a direct cheapest-in-category
- * DB lookup when the candidate shortlist itself has nothing cheap enough left
- * — that shortlist is shaped around a rough LOCAL budget guess (see
- * roughBudgetGuess), which can undershoot the model's own extracted budget
- * enough that even the cheapest shortlisted option per category still isn't
- * cheap enough to close the gap.
+ * one category at a time, cheapest-impact first, stopping as soon as the
+ * total is back within tolerance. The candidate shortlist alone is shaped
+ * around a rough LOCAL budget guess (see roughBudgetGuess) and can be too
+ * thin to find a good cut, so it's always widened with real DB alternatives
+ * before picking.
  */
 function enforceBudget(picks, candidates, budget) {
   if (!budget) return picks
@@ -418,27 +475,38 @@ function enforceBudget(picks, candidates, budget) {
     const cpu = result.find((p) => p.category === 'CPU')
     const socketConstraint =
       category === 'CPU' ? mobo?.socket : category === 'Motherboard' ? cpu?.socket : undefined
-    const requiredRamGen = category === 'RAM' && mobo ? RAM_DDR_BY_SOCKET[mobo.socket] : null
+    const requiredRamGen = category === 'RAM' ? requiredRamGeneration(mobo) : null
 
-    let options = candidates.filter((c) => c.category === category && parsePriceNum(c.price) < currentPrice)
+    // Same socket isn't sufficient on its own for a Motherboard downgrade —
+    // LGA1700 boards exist in both DDR4 and DDR5 variants, so swapping to a
+    // cheaper same-socket board could silently strand whatever RAM was
+    // already fixed to match the current one. Only exclude a candidate when
+    // its own memory type is KNOWN and different; boards with no stated type
+    // stay eligible, same "don't guess" stance as requiredRamGeneration.
+    const currentRamPick = category === 'Motherboard' ? result.find((p) => p.category === 'RAM') : null
+    const currentRamGen = currentRamPick ? ramDdrGeneration(currentRamPick) : null
+
+    let pool = candidates.filter((c) => c.category === category)
+    pool =
+      category === 'RAM' && requiredRamGen
+        ? pool.concat(getRamByDdrGeneration({ ddrGeneration: requiredRamGen, near: 0, excludeId: current.id, limit: 8 }))
+        : pool.concat(getCheapestInCategory({ category, socket: socketConstraint, limit: 8 }))
+
+    const floor = budget * (BUDGET_SHARE[category] ?? 0) * 0.5
+    let options = pool.filter((c) => parsePriceNum(c.price) < currentPrice && parsePriceNum(c.price) >= floor)
     if (socketConstraint) options = options.filter((c) => c.socket === socketConstraint)
     if (requiredRamGen) options = options.filter((c) => ramDdrGeneration(c) === requiredRamGen)
-
-    let cheapest = options.length
-      ? options.reduce((a, b) => (parsePriceNum(a.price) < parsePriceNum(b.price) ? a : b))
-      : null
-
-    if (!cheapest || parsePriceNum(cheapest.price) >= currentPrice) {
-      const fallback =
-        category === 'RAM' && requiredRamGen
-          ? getRamByDdrGeneration({ ddrGeneration: requiredRamGen, near: 0, excludeId: current.id, limit: 1 })[0]
-          : getCheapestInCategory({ category, socket: socketConstraint, limit: 1 })[0]
-      if (fallback && parsePriceNum(fallback.price) < currentPrice) cheapest = fallback
+    if (currentRamGen) {
+      options = options.filter((c) => {
+        const moboGen = moboDdrGeneration(c)
+        return !moboGen || moboGen === currentRamGen
+      })
     }
 
-    if (!cheapest) continue
-    total += parsePriceNum(cheapest.price) - currentPrice
-    result[idx] = cheapest
+    const chosen = pickSufficientCut(options, currentPrice, total, budget)
+    if (!chosen) continue
+    total += parsePriceNum(chosen.price) - currentPrice
+    result[idx] = chosen
   }
 
   return result
@@ -681,7 +749,8 @@ app.post('/api/build-chat', async (req, res) => {
   const currentBuildNote = currentPicksResolved.length
     ? `\n\nThe user's CURRENT build already has these parts picked (shown on screen right now):
 ${JSON.stringify(currentPicksResolved.map((p) => ({ id: p.id, category: p.category, name: p.name, price: p.price })))}
-If the user's latest message is a QUESTION about this current build (e.g. "does this cause a bottleneck", "is this good for X", "what do you think") rather than a request to change something, return the EXACT SAME ids as the current build in "picks" — do not silently swap any part, even if you'd have picked differently yourself. Only change the specific part(s) the user explicitly asks to change, keeping every other category identical to the current build.`
+Only return the EXACT SAME ids as the current build, unchanged, when the user is purely asking you to EVALUATE or EXPLAIN it without asking for anything different — e.g. "does this cause a bottleneck", "is this good for streaming", "why did you pick this CPU", "what do you think". Do not silently swap any part on a turn like that, even if you'd have picked differently yourself.
+Anything else — however it's phrased — is a change request and should recompute picks accordingly. This includes indirect or vague phrasing, not just literal "swap X for Y": spend more/less, "use the full budget," upgrade/downgrade, "I don't like this," "make it quieter," "no RGB," "more storage," "switch to Intel," "make it better," etc. A request naming one category (e.g. "get a better GPU") can still justify adjusting others too, not just that one category, if the budget or the change calls for it. When genuinely unsure whether something is an evaluation question or a change request, treat it as a change request — recomputing a build the user actually meant to just ask about is a much smaller miss than silently ignoring a real request.`
     : ''
 
   const systemInstruction = `You are the build assistant for a PC parts store's "Custom PC Builder" chat. You gather context through conversation, then recommend a complete, compatible build.
@@ -693,6 +762,8 @@ STEP 1 — Gather context. Before proposing a build, you need to know:
 - Any components the user already owns and doesn't want recommended (e.g. "I already have a case and PSU")
 - Brand preferences or exclusions, if any
 If the user hasn't given you enough to work with yet (at minimum a budget and a use case), ask a short, friendly clarifying question and return an empty "picks" array — do NOT guess a build out of a bare greeting or a single vague message. Re-derive all of this from the ENTIRE conversation so far on every turn, not just the latest message — a detail mentioned two messages ago (like an owned part or a brand preference) still applies until the user changes it.
+
+Not every message is a build request, though. If the user asks a general PC question instead — "what's better, Intel or AMD for gaming", "do I actually need liquid cooling", "how much RAM do I need for video editing", "what's the difference between DDR4 and DDR5" — just answer it directly and conversationally from your own knowledge, and return an empty "picks" array. Don't force the conversation back toward "what's your budget?" when the user hasn't asked for a build and the question didn't need that to answer. If a build is already on screen and the question relates to it, ground the answer in those actual parts rather than generic advice.
 
 STEP 2 — Recommend a build, once you have enough information. Rules for picks:
 - Use ONLY parts from the catalog below, referenced by their exact "id" — never invent parts, names, or specs.
@@ -745,7 +816,19 @@ ${JSON.stringify(candidates)}`
     // fallback/substitute pick the rest of this pipeline makes from here on.
     const shapedCandidates = applyBrandPreference(candidates, preferredBrand, excludedBrand)
 
-    let picks = getPartsByIds(parsed.picks ?? []).filter((p) => neededCategories.includes(p.category))
+    // The system prompt tells the model to pick only from the catalog it was
+    // shown, but nothing was actually verifying that — the model has
+    // returned real ids for real parts that were never in `candidates` at
+    // all (id guessing/misremembering, not hallucination of a fake part,
+    // but the effect is the same: an arbitrary, usually cheap, off-target
+    // product slipping into a category that looked deliberately chosen).
+    // Dropping non-candidate ids here turns that into a plain "missing
+    // category," which the backfill step right below already resolves
+    // correctly using the real shown shortlist.
+    const candidateIds = new Set(candidates.map((c) => c.id))
+    let picks = getPartsByIds(parsed.picks ?? [])
+      .filter((p) => neededCategories.includes(p.category))
+      .filter((p) => candidateIds.has(p.id))
 
     // The model has occasionally returned more than one id for the same
     // category (a duplicate/second-guessed pick) — keeping only the first

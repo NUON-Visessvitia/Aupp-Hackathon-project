@@ -22,6 +22,10 @@ function rowToPart(row) {
     socket: row.socket ?? undefined,
     specs: JSON.parse(row.specs),
     tags: JSON.parse(row.tags),
+    // Per-retailer prices for parts sourced from real storefronts (see
+    // PSU_LISTINGS in seed.js) — undefined for parts with a single canonical
+    // price, so callers can tell "one source" from "no source data at all".
+    sources: row.sources ? JSON.parse(row.sources) : undefined,
   }
 }
 

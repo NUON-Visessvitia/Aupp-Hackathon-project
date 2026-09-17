@@ -7,6 +7,17 @@ type ModalProduct = {
   price: string
   specs: [string, string][]
   img?: string
+  /** Per-retailer prices for parts sourced from real storefronts — omitted for parts with a single canonical price. */
+  sources?: { site: string; price: number }[]
+}
+
+/** "$95–$99" when a part is genuinely sold at different prices across its known retailers, its single price otherwise. */
+function formatPriceDisplay(product: ModalProduct): string {
+  if (!product.sources || product.sources.length < 2) return product.price
+  const prices = product.sources.map((s) => s.price)
+  const min = Math.min(...prices)
+  const max = Math.max(...prices)
+  return min === max ? `$${min}` : `$${min}–$${max}`
 }
 
 // Small pieces shared between the main landing page (App.tsx) and the
@@ -120,7 +131,9 @@ export function ProductModal({ product, onClose }: { product: ModalProduct; onCl
             <h3 className="text-[22px] sm:text-[24px] font-bold tracking-[-0.02em] mb-2 leading-tight">
               {product.name}
             </h3>
-            <p className="text-[20px] font-medium mb-6">{product.price}</p>
+            <p className="text-[20px] font-medium mb-6" title={product.sources?.map((s) => `${s.site}: $${s.price}`).join(' · ')}>
+              {formatPriceDisplay(product)}
+            </p>
             <div className="flex flex-col border-t border-[#E8E8E8]">
               {product.specs.map(([label, value]) => (
                 <div
