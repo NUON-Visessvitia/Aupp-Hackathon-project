@@ -501,11 +501,17 @@ ${JSON.stringify(candidates)}`
 
     // The model occasionally drops a category despite the instruction —
     // backfill from the same shortlist it was given so a full build always
-    // renders once picks are non-empty.
-    for (const category of BUILD_CATEGORIES) {
-      if (picks.some((p) => p.category === category)) continue
-      const fallback = candidates.find((c) => c.category === category)
-      if (fallback) picks.push(fallback)
+    // renders once picks are non-empty. Only when picks are ALREADY
+    // non-empty, though — an empty array is the model deliberately asking a
+    // clarifying question instead of building yet (e.g. the user just said
+    // "hi"), and backfilling every category from the shortlist in that case
+    // would silently turn "I need more info" into a full random build.
+    if (picks.length) {
+      for (const category of BUILD_CATEGORIES) {
+        if (picks.some((p) => p.category === category)) continue
+        const fallback = candidates.find((c) => c.category === category)
+        if (fallback) picks.push(fallback)
+      }
     }
 
     // The model occasionally ignores the matching-socket instruction and
