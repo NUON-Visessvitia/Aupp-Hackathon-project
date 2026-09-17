@@ -213,7 +213,7 @@ function Nav({
           }}
           className="text-[15px] font-bold tracking-[-0.02em] select-none"
         >
-          forge.
+          Komponent
         </button>
 
         <div className="hidden md:flex items-center gap-8">
@@ -832,7 +832,7 @@ function Footer() {
   const cols = [
     { title: "Products", links: ["Gaming PCs", "Cases", "Components", "Peripherals", "Accessories"] },
     { title: "Support", links: ["Build Guide", "Compatibility", "Warranty", "Returns", "Contact"] },
-    { title: "Company", links: ["About Forge", "News", "Careers", "Press", "Partners"] },
+    { title: "Company", links: ["About Komponent", "News", "Careers", "Press", "Partners"] },
     { title: "Legal", links: ["Privacy Policy", "Terms of Use", "Cookie Settings", "Sitemap"] },
   ]
 
@@ -842,7 +842,7 @@ function Footer() {
         <div className="flex flex-col md:flex-row justify-between gap-14 mb-16">
           {/* Brand */}
           <div className="flex-shrink-0">
-            <p className="text-[16px] font-bold tracking-[-0.02em] mb-4">forge.</p>
+            <p className="text-[16px] font-bold tracking-[-0.02em] mb-4">Komponent</p>
             <p className="text-[13px] text-[#999999] max-w-[200px] leading-[1.65]">
               Precision-engineered PC cases and hardware for builders who refuse to compromise.
             </p>
@@ -874,7 +874,7 @@ function Footer() {
 
         <div className="pt-8 flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-[12px] text-[#BBBBBB]">
-            © 2026 Forge Hardware Inc. All rights reserved.
+            © 2026 Komponent Hardware Inc. All rights reserved.
           </p>
           <div className="flex items-center gap-6">
             {["Instagram", "X / Twitter", "YouTube", "Discord"].map((s) => (

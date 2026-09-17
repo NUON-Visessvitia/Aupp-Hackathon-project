@@ -482,7 +482,7 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
           <span className="rotate-180 inline-block">
             <IconArrowRight />
           </span>
-          Back to forge.
+          Back to Komponent
         </button>
 
         <h1 className="text-[38px] md:text-[52px] font-bold tracking-[-0.025em] leading-[1.02] mb-3">
