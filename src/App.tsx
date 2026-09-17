@@ -71,7 +71,7 @@ const IconClose = () => (
 // ── Data ──────────────────────────────────────────────────────────────────────
 
 const NAV_LINKS: { label: string; items: string[] | null }[] = [
-  { label: "Komponent AI", items: null },
+  { label: "Gaming PCs", items: null },
   { label: "Components", items: COMPONENT_CATEGORIES },
   { label: "Peripherals", items: ["Keyboards", "Mice", "Monitors", "Headsets"] },
   { label: "News", items: null },
