@@ -71,7 +71,7 @@ const IconClose = () => (
 // ── Data ──────────────────────────────────────────────────────────────────────
 
 const NAV_LINKS: { label: string; items: string[] | null }[] = [
-  { label: "Gaming PCs", items: null },
+  { label: "Komponent AI", items: null },
   { label: "Components", items: COMPONENT_CATEGORIES },
   { label: "Peripherals", items: ["Keyboards", "Mice", "Monitors", "Headsets"] },
   { label: "News", items: null },
@@ -264,7 +264,7 @@ function Nav({
             ) : (
               <button
                 key={link.label}
-                onClick={link.label === "Gaming PCs" ? onOpenCustomPC : undefined}
+                onClick={link.label === "Komponent AI" ? onOpenCustomPC : undefined}
                 className="text-[13px] text-[#555555] hover:text-[#0A0A0A] transition-colors duration-150"
               >
                 {link.label}
@@ -394,7 +394,7 @@ function Nav({
                     key={link.label}
                     type="button"
                     onClick={() => {
-                      if (link.label === "Gaming PCs") onOpenCustomPC()
+                      if (link.label === "Komponent AI") onOpenCustomPC()
                       setMobileMenuOpen(false)
                     }}
                     className="text-left text-[15px] font-medium text-[#0A0A0A]"
@@ -831,7 +831,7 @@ function BannerCTA() {
 
 function Footer() {
   const cols = [
-    { title: "Products", links: ["Gaming PCs", "Cases", "Components", "Peripherals", "Accessories"] },
+    { title: "Products", links: ["Komponent AI", "Cases", "Components", "Peripherals", "Accessories"] },
     { title: "Support", links: ["Build Guide", "Compatibility", "Warranty", "Returns", "Contact"] },
     { title: "Company", links: ["About Komponent", "News", "Careers", "Press", "Partners"] },
     { title: "Legal", links: ["Privacy Policy", "Terms of Use", "Cookie Settings", "Sitemap"] },
