@@ -24,8 +24,6 @@ export type ComponentProduct = {
 }
 
 const IMG = {
-  qElite: "https://images.unsplash.com/photo-1657911940653-a1240f4ebf81?w=800&h=600&fit=crop&auto=format",
-  qFlow: "https://images.unsplash.com/photo-1760631731124-69d85bdd195d?w=800&h=600&fit=crop&auto=format",
   whiteInterior: "https://images.unsplash.com/photo-1587202372775-e229f172b9d7?w=800&h=600&fit=crop&auto=format",
   lianliRgb: "https://images.unsplash.com/photo-1738245494097-9b1e3971c3eb?w=800&h=600&fit=crop&auto=format",
   rogStrixInterior: "https://images.unsplash.com/photo-1642980701123-09a5a63ce1b9?w=800&h=600&fit=crop&auto=format",
@@ -44,36 +42,6 @@ const IMG = {
 
 export const COMPONENT_CATALOG: ComponentProduct[] = [
   // ── PC Case ──────────────────────────────────────────────────────────────
-  {
-    id: 1,
-    name: "Q9 Elite Case",
-    category: "PC Case",
-    price: "$249",
-    img: IMG.qElite,
-    featured: true,
-    specs: [
-      ["Form Factor", "Mid Tower ATX"],
-      ["Max GPU Length", "400 mm"],
-      ["Radiator Support", "Up to 420 mm x3"],
-      ["Front I/O", "USB-C, 2x USB-A"],
-      ["Side Panel", "Tempered glass"],
-    ],
-  },
-  {
-    id: 2,
-    name: "Q9 Flow Case",
-    category: "PC Case",
-    price: "$199",
-    img: IMG.qFlow,
-    featured: true,
-    specs: [
-      ["Form Factor", "Mid Tower ATX"],
-      ["Max GPU Length", "380 mm"],
-      ["Radiator Support", "Up to 360 mm x3"],
-      ["Front I/O", "USB-C, 2x USB-A"],
-      ["Side Panel", "Perforated mesh"],
-    ],
-  },
   {
     id: 3,
     name: "Lian Li O11 Dynamic EVO",

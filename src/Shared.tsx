@@ -20,6 +20,13 @@ export const IconArrowRight = () => (
   </svg>
 )
 
+/** The Komponent logo mark — an asymmetric 8-point sparkle, filled with currentColor so it matches whatever text color it sits next to. */
+export const IconLogoMark = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 0.96 L12.83 10 L18.79 5.21 L13.99 11.17 L20.16 12 L13.99 12.83 L17.09 17.09 L12.83 14 L12 23.04 L11.17 14 L6.57 17.43 L10 12.83 L2.88 12 L10 11.17 L7.25 7.25 L11.17 10 Z" />
+  </svg>
+)
+
 const IconClose = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 6 6 18M6 6l12 12" />

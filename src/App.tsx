@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { COMPONENT_CATALOG, COMPONENT_CATEGORIES, type ComponentProduct } from './data/products'
 import CustomPCBuilder from './CustomPCBuilder'
-import { IconArrowRight, OutlineButton, ProductModal } from './Shared'
+import { IconArrowRight, IconLogoMark, OutlineButton, ProductModal } from './Shared'
 
 /** Fades + slides a section up into view the first time it scrolls into the viewport — reused across the landing page instead of hand-rolling an IntersectionObserver per section. */
 function Reveal({
@@ -211,8 +211,9 @@ function Nav({
             onNavigateHome()
             setMobileMenuOpen(false)
           }}
-          className="text-[15px] font-bold tracking-[-0.02em] select-none"
+          className="flex items-center gap-1.5 text-[15px] font-bold tracking-[-0.02em] select-none"
         >
+          <IconLogoMark size={15} />
           Komponent
         </button>
 
@@ -842,7 +843,10 @@ function Footer() {
         <div className="flex flex-col md:flex-row justify-between gap-14 mb-16">
           {/* Brand */}
           <div className="flex-shrink-0">
-            <p className="text-[16px] font-bold tracking-[-0.02em] mb-4">Komponent</p>
+            <p className="flex items-center gap-1.5 text-[16px] font-bold tracking-[-0.02em] mb-4">
+              <IconLogoMark size={16} />
+              Komponent
+            </p>
             <p className="text-[13px] text-[#999999] max-w-[200px] leading-[1.65]">
               Precision-engineered PC cases and hardware for builders who refuse to compromise.
             </p>
