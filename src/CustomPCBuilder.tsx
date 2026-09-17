@@ -519,7 +519,7 @@ export default function CustomPCBuilder({ onBack }: { onBack: () => void }) {
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.25, ease: "easeOut" }}
-                  className={`max-w-[85%] text-[13px] leading-[1.6] px-4 py-3 rounded-2xl ${
+                  className={`max-w-[85%] text-[13px] leading-[1.6] px-4 py-3 rounded-2xl whitespace-pre-wrap ${
                     m.role === 'user'
                       ? 'self-end bg-[#0A0A0A] text-white rounded-br-sm'
                       : 'self-start bg-[#F4F4F4] text-[#0A0A0A] rounded-bl-sm'

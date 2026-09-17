@@ -10,6 +10,7 @@ import {
   getPricePercentile,
   getRamByDdrGeneration,
   getCheapestInCategory,
+  applyBrandPreference,
 } from './db.js'
 import { estimateFps } from './benchmarks.js'
 
@@ -142,7 +143,7 @@ const BUILD_RESPONSE_SCHEMA = {
     picks: {
       type: 'array',
       description:
-        'Catalog ids for the recommended build, one per decided category. Leave empty while still asking clarifying questions.',
+        'Catalog ids for the recommended build, one id per category still needed (see ownedCategories) — never include an id for a category the user already owns. Leave empty while still asking clarifying questions.',
       items: { type: 'integer' },
     },
     budget: {
@@ -165,8 +166,41 @@ const BUILD_RESPONSE_SCHEMA = {
       enum: ['1080p', '1440p', '4K', 'none'],
       description: 'Target gaming resolution, or "none" if unspecified.',
     },
+    useCase: {
+      type: 'string',
+      enum: ['gaming', 'editing', 'programming', 'streaming', 'general', 'none'],
+      description:
+        'The primary thing this PC is for, or "none" if the conversation hasn\'t said. "editing" covers video/photo editing and rendering; "programming" covers software development; "general" is everyday/office use with no specific demanding task.',
+    },
+    ownedCategories: {
+      type: 'array',
+      description:
+        'Categories the user has said they already own and do NOT want recommended/purchased (e.g. "I already have a case and PSU" -> ["PC Case", "Power Supply"]). Leave empty if nothing was mentioned as already owned.',
+      items: { type: 'string', enum: BUILD_CATEGORIES },
+    },
+    preferredBrand: {
+      type: 'string',
+      description:
+        'A brand the user asked to favor (e.g. "I prefer ASUS", "get me a Corsair PSU if you can"), or "none" if unstated. A single brand name, not a sentence.',
+    },
+    excludedBrand: {
+      type: 'string',
+      description:
+        'A brand the user asked to avoid (e.g. "no EVGA", "stay away from Gigabyte"), or "none" if unstated. A single brand name, not a sentence.',
+    },
   },
-  required: ['reply', 'picks', 'budget', 'platform', 'tag', 'resolution'],
+  required: [
+    'reply',
+    'picks',
+    'budget',
+    'platform',
+    'tag',
+    'resolution',
+    'useCase',
+    'ownedCategories',
+    'preferredBrand',
+    'excludedBrand',
+  ],
 }
 
 // How big a gap in price-percentile-within-category (0-1) between the CPU
@@ -410,6 +444,208 @@ function enforceBudget(picks, candidates, budget) {
   return result
 }
 
+function specNumber(part, label) {
+  const raw = part.specs.find(([l]) => l === label)?.[1]
+  const num = raw != null ? Number.parseFloat(String(raw)) : NaN
+  return Number.isFinite(num) ? num : null
+}
+
+function pickClosestToTarget(options, targetPrice) {
+  if (!options.length) return null
+  return options.reduce((best, c) =>
+    Math.abs(parsePriceNum(c.price) - targetPrice) < Math.abs(parsePriceNum(best.price) - targetPrice) ? c : best,
+  )
+}
+
+// Price-within-category is only a rough performance-tier proxy (see
+// detectBottleneck) — reliable enough to catch an obviously lopsided CPU/GPU
+// pairing, but not reliable enough to trust blindly when picking a specific
+// "upgrade" to recommend by name: this catalog spans many GPU/CPU
+// generations, and an older or oddly-priced part can cost slightly more than
+// a newer one while actually being worse. Requiring the primary spec
+// (VRAM for GPU, cores for CPU) not to regress catches that — a candidate
+// that's pricier but has LESS VRAM/fewer cores is a real part, just not a
+// real upgrade, so it shouldn't be recommended as one.
+function isRealUpgrade(category, current, candidate) {
+  if (category === 'GPU') {
+    // Also stay within the same chipset family (GeForce/Radeon/Arc/...) —
+    // the catalog mixes consumer gaming cards with workstation/professional
+    // ones (Quadro, RTX "Ada Generation", FirePro, ...) that can cost more
+    // and even carry more VRAM while performing worse for gaming, since
+    // that VRAM isn't paired with gaming-oriented core counts or clocks.
+    const curChipset = current.specs.find(([l]) => l === 'Chipset')?.[1]
+    const newChipset = candidate.specs.find(([l]) => l === 'Chipset')?.[1]
+    const curFamily = curChipset?.split(' ')[0]
+    const newFamily = newChipset?.split(' ')[0]
+    if (curFamily && newFamily && curFamily !== newFamily) return false
+
+    // Same-family model number (e.g. "RTX 5070" -> 5070) as a stand-in for
+    // generation/tier — even within one family this catalog's frozen-then-
+    // rescaled pricing (see PRICE_MULTIPLIER in seed.js) doesn't reliably
+    // rank a newer card above an older one on price alone, so an older,
+    // lower-numbered card can cost more than a newer, higher-numbered one.
+    const curModel = Number(curChipset?.match(/\d{3,4}/)?.[0])
+    const newModel = Number(newChipset?.match(/\d{3,4}/)?.[0])
+    if (Number.isFinite(curModel) && Number.isFinite(newModel) && newModel < curModel) return false
+
+    const curVram = specNumber(current, 'Memory')
+    const newVram = specNumber(candidate, 'Memory')
+    if (curVram != null && newVram != null) return newVram >= curVram
+  }
+  if (category === 'CPU') {
+    const curCores = specNumber(current, 'Cores')
+    const newCores = specNumber(candidate, 'Cores')
+    if (curCores != null && newCores != null) return newCores >= curCores
+  }
+  return true
+}
+
+function cpuUpgradeDetail(current, upgrade) {
+  const curCores = specNumber(current, 'Cores')
+  const upCores = specNumber(upgrade, 'Cores')
+  if (curCores != null && upCores != null && upCores > curCores) {
+    return `${upCores - curCores} more cores (${curCores} → ${upCores})`
+  }
+  const curBoost = specNumber(current, 'Boost Clock')
+  const upBoost = specNumber(upgrade, 'Boost Clock')
+  if (curBoost != null && upBoost != null && upBoost > curBoost) {
+    return `a higher boost clock (${curBoost} → ${upBoost} GHz)`
+  }
+  return 'meaningfully faster single- and multi-core performance'
+}
+
+function gpuUpgradeDetail(current, upgrade) {
+  const curVram = specNumber(current, 'Memory')
+  const upVram = specNumber(upgrade, 'Memory')
+  if (curVram != null && upVram != null && upVram > curVram) {
+    return `${upVram - curVram} GB more VRAM (${curVram} → ${upVram} GB)`
+  }
+  return 'noticeably more graphics performance'
+}
+
+function storageCapacityGB(part) {
+  const raw = part.specs.find(([l]) => l === 'Capacity')?.[1]
+  const match = raw != null ? String(raw).match(/([\d.]+)\s*(TB|GB)/i) : null
+  if (!match) return null
+  const num = Number(match[1])
+  return match[2].toUpperCase() === 'TB' ? num * 1000 : num
+}
+
+function findStorageUpgrade(currentStorage, candidates, budgetAvailable) {
+  const curCapacity = storageCapacityGB(currentStorage)
+  if (curCapacity == null) return null
+  const currentType = currentStorage.specs.find(([l]) => l === 'Type')?.[1]
+  const currentPrice = parsePriceNum(currentStorage.price)
+  const options = candidates.filter((c) => {
+    if (c.category !== 'Storage') return false
+    // Same drive type only — more capacity on a slower type (e.g. swapping
+    // an NVMe SSD for a bigger spinning HDD) isn't a real-world upgrade even
+    // though the number on the box goes up.
+    const type = c.specs.find(([l]) => l === 'Type')?.[1]
+    if (currentType && type !== currentType) return false
+    const cap = storageCapacityGB(c)
+    if (cap == null || cap <= curCapacity) return false
+    const delta = parsePriceNum(c.price) - currentPrice
+    return delta > 0 && delta <= budgetAvailable
+  })
+  if (!options.length) return null
+  return options.reduce((best, c) => (storageCapacityGB(c) > storageCapacityGB(best) ? c : best))
+}
+
+// How much percentile gap (see detectBottleneck) counts as a "leans one way"
+// framing worth mentioning even when it's not big enough to cross the actual
+// bottleneck threshold — smaller than BOTTLENECK_THRESHOLD on purpose, since
+// this is a softer "something to know" note, not a warning badge.
+const LEAN_THRESHOLD = 0.12
+
+/**
+ * Deterministic "what if" trade-off scenarios grounded in real catalog data
+ * — computed here rather than left to the model for the same reason the
+ * reply is forbidden from naming CPU/GPU models itself (see the system
+ * prompt): an LLM asked to invent a plausible "$100 more gets you X"
+ * suggestion has no guarantee the part it names is real, priced what it
+ * says, or in the catalog at all. Only produced once a real build exists.
+ */
+function buildTradeOffs({ picks, candidates, resolution, useCase, bottleneck }) {
+  const cpu = picks.find((p) => p.category === 'CPU')
+  const gpu = picks.find((p) => p.category === 'GPU')
+  if (!cpu || !gpu) return []
+
+  const mobo = picks.find((p) => p.category === 'Motherboard')
+  const cpuPct = getPricePercentile('CPU', parsePriceNum(cpu.price))
+  const gpuPct = getPricePercentile('GPU', parsePriceNum(gpu.price))
+  const tradeOffs = []
+
+  // 1) Highest-impact upgrade for roughly $100-150 more, on whichever of
+  // CPU/GPU matters more for the stated use case (or, absent a clear signal,
+  // whichever currently has the lower relative tier and so more headroom).
+  let leverCategory
+  if (useCase === 'editing' || useCase === 'programming') leverCategory = 'CPU'
+  else if (useCase === 'gaming' && resolution === '1080p') leverCategory = 'CPU'
+  else if (useCase === 'gaming') leverCategory = 'GPU'
+  else leverCategory = cpuPct <= gpuPct ? 'CPU' : 'GPU'
+
+  const leverCurrent = leverCategory === 'CPU' ? cpu : gpu
+  let upgradeOptions = candidates.filter(
+    (c) =>
+      c.category === leverCategory &&
+      parsePriceNum(c.price) > parsePriceNum(leverCurrent.price) &&
+      isRealUpgrade(leverCategory, leverCurrent, c),
+  )
+  if (leverCategory === 'CPU' && mobo) upgradeOptions = upgradeOptions.filter((c) => c.socket === mobo.socket)
+  const upgrade = pickClosestToTarget(upgradeOptions, parsePriceNum(leverCurrent.price) + 120)
+  if (upgrade) {
+    const delta = Math.round(parsePriceNum(upgrade.price) - parsePriceNum(leverCurrent.price))
+    const detail = leverCategory === 'CPU' ? cpuUpgradeDetail(leverCurrent, upgrade) : gpuUpgradeDetail(leverCurrent, upgrade)
+    tradeOffs.push(
+      `If your budget went up ~$${delta}, the highest-impact upgrade would be the ${upgrade.name} (${upgrade.price}) for the ${leverCategory} — ${detail}.`,
+    )
+  }
+
+  // 2) Reallocate: drop a tier on the OTHER of CPU/GPU, see what it funds.
+  const otherCategory = leverCategory === 'CPU' ? 'GPU' : 'CPU'
+  const otherCurrent = otherCategory === 'CPU' ? cpu : gpu
+  let downgradeOptions = candidates.filter(
+    (c) => c.category === otherCategory && parsePriceNum(otherCurrent.price) - parsePriceNum(c.price) >= 40,
+  )
+  if (otherCategory === 'CPU' && mobo) downgradeOptions = downgradeOptions.filter((c) => c.socket === mobo.socket)
+  const downgrade = downgradeOptions.length
+    ? downgradeOptions.reduce((best, c) => (parsePriceNum(c.price) > parsePriceNum(best.price) ? c : best))
+    : null
+  if (downgrade) {
+    const savings = Math.round(parsePriceNum(otherCurrent.price) - parsePriceNum(downgrade.price))
+    const storage = picks.find((p) => p.category === 'Storage')
+    const storageUpgrade = storage ? findStorageUpgrade(storage, candidates, savings) : null
+    const funds = storageUpgrade
+      ? `enough to move storage up to the ${storageUpgrade.name} (${storageUpgrade.price}) instead`
+      : `about $${savings} of headroom to put toward any other part`
+    tradeOffs.push(
+      `If you dropped the ${otherCategory} to the ${downgrade.name} (${downgrade.price}), you'd free up ~$${savings} — ${funds}.`,
+    )
+  }
+
+  // 3) CPU-bound vs GPU-bound framing — reuses the bottleneck verdict when
+  // there's an active one, otherwise states a softer directional lean.
+  if (bottleneck) {
+    tradeOffs.push(
+      bottleneck.category === 'CPU'
+        ? `This build is CPU-bound for your use case — a beefier GPU wouldn't help much until the CPU also moves up a tier.`
+        : `This build is GPU-bound for your use case — a faster CPU wouldn't help much until the GPU also moves up a tier.`,
+    )
+  } else {
+    const gap = gpuPct - cpuPct
+    if (gap > LEAN_THRESHOLD) {
+      tradeOffs.push(`This build leans a bit GPU-heavy — the CPU has some headroom before it'd start limiting the GPU.`)
+    } else if (-gap > LEAN_THRESHOLD) {
+      tradeOffs.push(`This build leans a bit CPU-heavy — the GPU has some headroom before it'd start limiting the CPU.`)
+    } else {
+      tradeOffs.push(`CPU and GPU are well matched here — neither should meaningfully hold the other back.`)
+    }
+  }
+
+  return tradeOffs.slice(0, 3)
+}
+
 app.post('/api/build-chat', async (req, res) => {
   const { messages, currentPicks } = req.body
 
@@ -448,17 +684,28 @@ ${JSON.stringify(currentPicksResolved.map((p) => ({ id: p.id, category: p.catego
 If the user's latest message is a QUESTION about this current build (e.g. "does this cause a bottleneck", "is this good for X", "what do you think") rather than a request to change something, return the EXACT SAME ids as the current build in "picks" — do not silently swap any part, even if you'd have picked differently yourself. Only change the specific part(s) the user explicitly asks to change, keeping every other category identical to the current build.`
     : ''
 
-  const systemInstruction = `You are the build assistant for a PC parts store's "Custom PC Builder" chat.
-Recommend a complete build using ONLY parts from the catalog below, referenced by their exact "id" — never invent parts, names, or specs.
-A complete build has exactly one pick from each of these categories: ${BUILD_CATEGORIES.join(', ')}.
-The CPU and Motherboard you pick must have matching "socket" values.
-Keep the CPU and GPU reasonably matched in performance tier for the stated use case — avoid pairing a budget-tier CPU with a high-end GPU (or the reverse) unless the user's budget genuinely can't do better, since a lopsided pairing leaves one part bottlenecking the other.
-Ask a short clarifying question (and return an empty "picks" array) if the user hasn't given you enough to work with yet — a budget and a use case (e.g. gaming resolution, streaming, editing) is enough to proceed.
-Once you have enough information, always return a full set of picks (one id per category) in the same response as your reply — don't describe the build in prose without also returning the picks.
-Keep replies short (2-4 sentences), friendly, and specific about why the parts fit the stated budget and use case — cite at least one concrete spec from the catalog that matters for that use case (e.g. core count and RAM for video editing/rendering, VRAM and clock speed for gaming, upload-friendly cooling and storage speed for streaming), not just generic praise like "powerful" or "great performance."
-Do NOT name a specific CPU or GPU model in your reply text (e.g. don't write "the Core Ultra 9 285K" or "the RTX 5090") — only describe them generically ("the processor", "the graphics card"). The exact part names are shown separately in the UI and will be appended automatically; naming one yourself risks describing a different part than the one you actually picked.${currentBuildNote}
+  const systemInstruction = `You are the build assistant for a PC parts store's "Custom PC Builder" chat. You gather context through conversation, then recommend a complete, compatible build.
 
-Also read the user's budget, platform preference, aesthetic/acoustic tag, and target resolution out of the conversation so far, and return them in "budget"/"platform"/"tag"/"resolution" — interpret natural, flexible phrasing generously (e.g. "no budget"/"money is no object" → a generous but sensible figure like 3500; budget-conscious framing with no number → a modest default like 1200; budget 0 only if the conversation gives no signal at all about spending).
+STEP 1 — Gather context. Before proposing a build, you need to know:
+- Primary use case (gaming, video editing, programming, streaming, general use, ...)
+- Budget for the whole build
+- If gaming: target resolution/frame rate
+- Any components the user already owns and doesn't want recommended (e.g. "I already have a case and PSU")
+- Brand preferences or exclusions, if any
+If the user hasn't given you enough to work with yet (at minimum a budget and a use case), ask a short, friendly clarifying question and return an empty "picks" array — do NOT guess a build out of a bare greeting or a single vague message. Re-derive all of this from the ENTIRE conversation so far on every turn, not just the latest message — a detail mentioned two messages ago (like an owned part or a brand preference) still applies until the user changes it.
+
+STEP 2 — Recommend a build, once you have enough information. Rules for picks:
+- Use ONLY parts from the catalog below, referenced by their exact "id" — never invent parts, names, or specs.
+- Return exactly one pick per category from this list, EXCEPT any category the user already owns (see "ownedCategories" below — never return a pick for one of those): ${BUILD_CATEGORIES.join(', ')}.
+- The CPU and Motherboard you pick must have matching "socket" values.
+- Keep the CPU and GPU reasonably matched in performance tier for the stated use case — avoid pairing a budget-tier CPU with a high-end GPU (or the reverse) unless the user's budget genuinely can't do better, since a lopsided pairing leaves one part bottlenecking the other.
+- If a preferred or excluded brand was stated, favor/avoid it among the catalog options actually available — never pick outside the catalog just to satisfy it, and never treat it as a hard blocker if nothing in a category matches.
+- Always return the full set of picks (one id per still-needed category) in the same response as your reply — don't describe a build in prose without also returning the picks.
+
+Keep "reply" short (2-4 sentences), friendly, and specific about why the parts fit the stated budget and use case — cite at least one concrete spec from the catalog that matters for that use case (e.g. core count and RAM for video editing/rendering, VRAM and clock speed for gaming, upload-friendly cooling and storage speed for streaming), not just generic praise like "powerful" or "great performance."
+Do NOT name a specific CPU or GPU model in your reply text (e.g. don't write "the Core Ultra 9 285K" or "the RTX 5090") — only describe them generically ("the processor", "the graphics card"). The exact part names, the total cost, any compatibility notes, the bottleneck analysis, and trade-off/"what if" scenarios are all handled separately and appended automatically — do not attempt any of that yourself in "reply", and do not summarize specific reliability/review information about any part (a separate feature handles that, grounded in an actual search — don't guess at reputations here).${currentBuildNote}
+
+Also read the user's budget, platform preference, aesthetic/acoustic tag, target resolution, use case, owned components, and brand preferences out of the conversation so far, and return them in "budget"/"platform"/"tag"/"resolution"/"useCase"/"ownedCategories"/"preferredBrand"/"excludedBrand" — interpret natural, flexible phrasing generously (e.g. "no budget"/"money is no object" → a generous but sensible figure like 3500; budget-conscious framing with no number → a modest default like 1200; budget 0 only if the conversation gives no signal at all about spending).
 
 IMPORTANT: the catalog below is a shortlist from a much larger inventory, not the complete list of everything in stock — it may not include every specific named product. If the user asks about a specific product and it's not in the catalog, that almost always means it's real but just isn't in this shortlist — say so and quote what it would actually cost if you can tell from context, or suggest raising the budget. Never claim a well-known, real product is "out of stock," "unavailable," or "doesn't exist" just because it isn't in this shortlist.
 
@@ -484,8 +731,21 @@ ${JSON.stringify(candidates)}`
     const parsed = JSON.parse(response.text)
     const budget = parsed.budget > 0 ? parsed.budget : null
     const resolution = parsed.resolution && parsed.resolution !== 'none' ? parsed.resolution : null
+    const useCase = parsed.useCase && parsed.useCase !== 'none' ? parsed.useCase : null
+    const preferredBrand = parsed.preferredBrand && parsed.preferredBrand !== 'none' ? parsed.preferredBrand : null
+    const excludedBrand = parsed.excludedBrand && parsed.excludedBrand !== 'none' ? parsed.excludedBrand : null
+    const ownedCategories = Array.isArray(parsed.ownedCategories)
+      ? [...new Set(parsed.ownedCategories.filter((c) => BUILD_CATEGORIES.includes(c)))]
+      : []
+    const neededCategories = BUILD_CATEGORIES.filter((c) => !ownedCategories.includes(c))
 
-    let picks = getPartsByIds(parsed.picks ?? [])
+    // Brand isn't known until this same response (it's extracted from the
+    // conversation in the same call that produces picks), so it can't shape
+    // the shortlist the way budget/platform do — instead it biases every
+    // fallback/substitute pick the rest of this pipeline makes from here on.
+    const shapedCandidates = applyBrandPreference(candidates, preferredBrand, excludedBrand)
+
+    let picks = getPartsByIds(parsed.picks ?? []).filter((p) => neededCategories.includes(p.category))
 
     // The model has occasionally returned more than one id for the same
     // category (a duplicate/second-guessed pick) — keeping only the first
@@ -507,9 +767,9 @@ ${JSON.stringify(candidates)}`
     // "hi"), and backfilling every category from the shortlist in that case
     // would silently turn "I need more info" into a full random build.
     if (picks.length) {
-      for (const category of BUILD_CATEGORIES) {
+      for (const category of neededCategories) {
         if (picks.some((p) => p.category === category)) continue
-        const fallback = candidates.find((c) => c.category === category)
+        const fallback = shapedCandidates.find((c) => c.category === category)
         if (fallback) picks.push(fallback)
       }
     }
@@ -527,7 +787,7 @@ ${JSON.stringify(candidates)}`
       const moboPick = picks[moboPickIdx]
       if (cpuPick.socket && cpuPick.socket !== moboPick.socket) {
         const fixedMobo =
-          candidates.find((c) => c.category === 'Motherboard' && c.socket === cpuPick.socket) ??
+          shapedCandidates.find((c) => c.category === 'Motherboard' && c.socket === cpuPick.socket) ??
           getAlternatives({
             category: 'Motherboard',
             excludeId: moboPick.id,
@@ -546,21 +806,27 @@ ${JSON.stringify(candidates)}`
     // correction runs before budget enforcement so a budget-driven downgrade
     // gets the final say on total cost, and enforceBudget's own socket/DDR
     // filters keep whatever these two already fixed intact.
-    picks = fixRamGeneration(picks, candidates)
-    ;({ picks } = fixBottleneck(picks, candidates, resolution, budget))
-    picks = enforceBudget(picks, candidates, budget)
+    picks = fixRamGeneration(picks, shapedCandidates)
+    ;({ picks } = fixBottleneck(picks, shapedCandidates, resolution, budget))
+    picks = enforceBudget(picks, shapedCandidates, budget)
 
     const bottleneck = picks.length ? detectBottleneck(picks, resolution) : null
+    const tradeOffs = picks.length
+      ? buildTradeOffs({ picks, candidates: shapedCandidates, resolution, useCase, bottleneck })
+      : []
 
     // The model's free-text reply is instructed not to name specific
     // CPU/GPU models (see system prompt) since that's proven unreliable —
     // append the real names here instead, guaranteed to match what's
-    // actually in `picks` rather than whatever the model imagined.
+    // actually in `picks` rather than whatever the model imagined. The
+    // trade-off scenarios are appended the same way, for the same reason
+    // (see buildTradeOffs).
     let reply = parsed.reply
     if (picks.length) {
       const cpu = picks.find((p) => p.category === 'CPU')
       const gpu = picks.find((p) => p.category === 'GPU')
       if (cpu && gpu) reply += ` This build pairs the ${cpu.name} with the ${gpu.name}.`
+      if (tradeOffs.length) reply += `\n\n${tradeOffs.map((t) => `• ${t}`).join('\n')}`
     }
 
     res.json({ reply, picks, bottleneck, budget, resolution })

@@ -166,6 +166,43 @@ export function getCandidatesSpread({ perCategory = 20 } = {}) {
   ].map(rowToPart)
 }
 
+/**
+ * Brand is a soft preference, not a compatibility constraint (unlike socket/
+ * DDR generation), so this narrows a candidate list to name-matches rather
+ * than enforcing anything — "product name contains this brand" (works for
+ * prefix brands like "Asus PRIME..." and for GPUs where the AIB partner is
+ * parenthetical, e.g. "GeForce RTX 5070 (Gigabyte WINDFORCE...)"). Falls back
+ * to the unfiltered rows per category when a preferred brand has no match at
+ * all, same fallback spirit as the tag filter above. Brand isn't known until
+ * the model's own response (it's extracted from the same conversation in the
+ * same call that produces picks), so this can't shape candidates before that
+ * call the way budget/platform do — instead it's applied afterward, to bias
+ * whichever deterministic backfill/fixup logic picks a replacement part.
+ */
+export function applyBrandPreference(parts, preferredBrand, excludedBrand) {
+  if (!preferredBrand && !excludedBrand) return parts
+
+  const byCategory = new Map()
+  for (const part of parts) {
+    if (!byCategory.has(part.category)) byCategory.set(part.category, [])
+    byCategory.get(part.category).push(part)
+  }
+
+  const out = []
+  for (const categoryParts of byCategory.values()) {
+    let filtered = categoryParts
+    if (excludedBrand) {
+      filtered = filtered.filter((p) => !p.name.toLowerCase().includes(excludedBrand.toLowerCase()))
+    }
+    if (preferredBrand) {
+      const preferred = filtered.filter((p) => p.name.toLowerCase().includes(preferredBrand.toLowerCase()))
+      if (preferred.length) filtered = preferred
+    }
+    out.push(...filtered)
+  }
+  return out
+}
+
 export function getPartsByIds(ids) {
   if (!ids.length) return []
   const rows = byIdsStmt(ids.length).all(...ids)
